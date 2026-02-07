@@ -6,13 +6,15 @@ A lightweight assistant that runs entirely locally and remembers things about yo
 
 - Chats using local LLMs (via LM Studio or any OpenAI-like endpoint)
 - Stores facts about you that persist between sessions
+- **Searches your Obsidian vault** for notes with intelligent filtering
+- **Maintains structured AI memory notes** in your Obsidian vault
 - Loads previous context automatically when you restart
 
 ## Why this exists
 
 Most local LLM setups forget everything when you close them. This one doesn't.
 
-Currently stores everything in a simple JSON file. Future versions will integrate with Obsidian (markdown!) and support smarter memory retrieval.
+Currently stores everything in a simple JSON file and integrates with Obsidian for knowledge retrieval.
 
 ## Requirements
 
@@ -23,20 +25,48 @@ Currently stores everything in a simple JSON file. Future versions will integrat
 
 1. Start LM Studio and load a model
 2. `pip install -r requirements.txt`
-3. `python src/chat.py`
+3. Copy `.env.example` to `.env` and configure:
+   - `LMSTUDIO_URL`: Your LM Studio endpoint (default: `http://localhost:1234`)
+   - `OBSIDIAN_PATH`: Path to your Obsidian vault (e.g., `/home/user/Documents/Notes`)
+4. `python src/chat.py`
+
+## Features
+
+### Basic Memory Storage
+- Persistently stores facts about you in JSON format
+- Automatically retrieves relevant context for conversations
+- Avoids duplicate information
+
+### AI Memory Notes (NEW!)
+- Creates structured notes in `AI Memory/` folder in your Obsidian vault
+- Organizes information by topics, people, projects
+- Automatic metadata tracking (created, updated, topics)
+- Safe operations confined to AI Memory folder
+- Six operations: create, read, update, append, list, delete
+- See [AI_MEMORY_GUIDE.md](AI_MEMORY_GUIDE.md) for detailed usage
+
+### Obsidian Vault Search
+- Search vault by query (searches titles and content)
+- Filter by tags (supports both `#tag` and frontmatter `tags: [tag]` formats)
+- Filter by folder path
+- Returns top 10 results sorted by relevance
+- Shows preview snippets around matches
+- Read-only access to your existing notes
 
 ## Current limitations
 
-- All facts get loaded into every conversation (fine for <100 facts, will need retrieval later)
-- No categorization or organization yet
-- Memory is append-only (no editing/deleting)
+- Basic facts get loaded into every conversation (fine for <100 facts, will need retrieval later)
+- AI Memory notes require manual management by the LLM (no automatic organization yet)
 
 ## Roadmap
 
-- Memory retrieval tool (search instead of dump-all)
-- Obsidian integration
-- Memory categories (personal, projects, preferences, etc.)
+- ✅ Memory retrieval tool (search instead of dump-all)
+- ✅ Obsidian integration (vault search)
+- ✅ Note creation/editing via tools (AI Memory system)
+- ✅ Memory categories (personal, projects, preferences, etc.)
 - Conversation summaries
+- Semantic search using embeddings
+- Enhanced memory: cross-reference notes, auto-categorization
 
 ## Tested
 Testing with *qwen/qwen3-vl-8b*
