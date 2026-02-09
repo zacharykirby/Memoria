@@ -240,6 +240,44 @@ def _read_file_safe(path: Path) -> str:
         return ""
 
 
+def _validate_memory_file_path(file_key: str, base_path: Path) -> tuple[bool, str]:
+    """
+    Validate that a file key is safe and won't escape the memory folder.
+
+    Args:
+        file_key: Relative file path from LLM (e.g., "work/projects", "personal")
+        base_path: Base directory (e.g., AI Memory/context/)
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not isinstance(file_key, str):
+        return False, f"Invalid path: key must be string, got {type(file_key).__name__}"
+    file_key = file_key.strip()
+    if not file_key:
+        return False, "Invalid path: empty file key"
+
+    # Check for path traversal attempts
+    if ".." in file_key or file_key.startswith("/") or file_key.startswith("\\"):
+        return False, f"Invalid path: {file_key} (path traversal attempt)"
+
+    # Check for absolute paths or drive letters
+    if ":" in file_key or file_key.startswith("~"):
+        return False, f"Invalid path: {file_key} (absolute path not allowed)"
+
+    # Construct full path and verify it's still under base_path
+    try:
+        full_path = (base_path / f"{file_key}.md").resolve()
+        base_resolved = base_path.resolve()
+        full_path.relative_to(base_resolved)
+    except ValueError:
+        return False, f"Invalid path: {file_key} (escapes base directory)"
+    except Exception as e:
+        return False, f"Invalid path: {file_key} ({str(e)})"
+
+    return True, ""
+
+
 def write_organized_memory(memory_structure: Dict) -> Dict:
     """
     Write memory from exploration extraction. Creates subdirs as needed.
@@ -265,20 +303,28 @@ def write_organized_memory(memory_structure: Dict) -> Dict:
             content = content.strip()
             if not content:
                 continue
+            is_valid, error_msg = _validate_memory_file_path(file_key, context_dir)
+            if not is_valid:
+                print(f"Skipping invalid context path: {error_msg}")
+                continue
             # file_key may be "personal", "work/current-role", "life/finances", etc.
             full_path = context_dir / f"{file_key}.md"
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
 
         timelines_dir = root / TIMELINES_FOLDER
+        timelines_dir.mkdir(parents=True, exist_ok=True)
         timelines_data = memory_structure.get("timelines") or {}
-        for file_name, content in timelines_data.items():
+        for file_key, content in timelines_data.items():
             content = (content if isinstance(content, str) else "") or ""
             content = content.strip()
             if not content:
                 continue
-            timelines_dir.mkdir(parents=True, exist_ok=True)
-            (timelines_dir / f"{file_name}.md").write_text(content, encoding="utf-8")
+            is_valid, error_msg = _validate_memory_file_path(file_key, timelines_dir)
+            if not is_valid:
+                print(f"Skipping invalid timeline path: {error_msg}")
+                continue
+            (timelines_dir / f"{file_key}.md").write_text(content, encoding="utf-8")
 
         return {"success": True}
     except Exception as e:

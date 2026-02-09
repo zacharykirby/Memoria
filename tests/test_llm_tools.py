@@ -11,7 +11,7 @@ import pytest
 # Ensure src is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from memory import ensure_memory_structure
+from memory import ensure_memory_structure, write_organized_memory
 
 
 @pytest.fixture
@@ -278,6 +278,44 @@ def test_add_goal_success(execute_tool, vault_path):
         "goal_type": "current"
     })
     assert "Goal added" in out or "Updated" in out or "timeline" in out.lower()
+
+
+# --- write_organized_memory path traversal ---
+
+
+def test_write_organized_memory_path_traversal_prevention(vault_path):
+    """Test that malicious paths from LLM are blocked."""
+    malicious_memory = {
+        "core_memory": "Safe content",
+        "context": {
+            "../../etc/passwd": "Malicious content",  # Path traversal
+            "/etc/shadow": "Absolute path",  # Absolute path
+            "work/projects": "Safe content",  # Valid nested path
+            "personal": "Safe content",  # Valid simple path
+            "~/.ssh/keys": "Home directory escape",  # Home dir escape
+        },
+        "timelines": {
+            "../../../tmp/bad": "Escape attempt",
+            "current-goals": "Safe timeline",
+        },
+    }
+
+    write_organized_memory(malicious_memory)
+
+    memory_dir = vault_path / "AI Memory"
+
+    # Verify safe files were created
+    assert (memory_dir / "context/work/projects.md").exists()
+    assert (memory_dir / "context/personal.md").exists()
+    assert (memory_dir / "timelines/current-goals.md").exists()
+
+    # Check that no files escaped the AI Memory folder
+    parent_of_memory = memory_dir.parent
+    for bad_file in ["passwd", "shadow", "keys", "bad"]:
+        escaped = list(parent_of_memory.rglob(f"*{bad_file}*"))
+        # Only allow matches inside memory_dir, not outside
+        outside = [p for p in escaped if memory_dir not in p.parents and p != memory_dir]
+        assert not outside, f"Path traversal created file outside AI Memory: {outside}"
 
 
 # --- unknown tool ---
