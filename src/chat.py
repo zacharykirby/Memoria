@@ -1711,6 +1711,100 @@ CONSOLIDATION_TOOLS = [
 ]
 
 
+def run_agent_loop(
+    initial_messages: list,
+    tools: list,
+    max_iterations: int = 10,
+    stream_first_response: bool = True,
+    show_tool_calls: bool = True,
+):
+    """
+    Run the agentic loop: LLM → tools → LLM → tools → ... → final response.
+    Tool results are fed back to the LLM so it can read-then-write and multi-step.
+
+    Args:
+        initial_messages: Starting conversation history
+        tools: Available tool definitions
+        max_iterations: Maximum number of iterations before forcing stop
+        stream_first_response: Whether to stream the first LLM response
+        show_tool_calls: Whether to display tool execution in UI
+
+    Returns:
+        dict with "messages", "final_response", "iterations"
+    """
+    messages = list(initial_messages)
+    iteration = 0
+    done = False
+    message = {}
+
+    while not done and iteration < max_iterations:
+        iteration += 1
+        should_stream = stream_first_response and (iteration == 1)
+
+        if should_stream:
+            console.print()
+            with Live(Markdown(""), console=console, refresh_per_second=15, transient=False) as live:
+                response = call_llm(messages, tools=tools, stream=True, live_display=live)
+        else:
+            response = call_llm(messages, tools=tools, stream=False)
+
+        if not response:
+            console.print("[bold #FF10F0]Failed to get response from LLM[/bold #FF10F0]")
+            break
+
+        message = response["choices"][0]["message"]
+        tool_calls_raw = message.get("tool_calls") or []
+        assistant_msg = {"role": "assistant", "content": message.get("content")}
+        if tool_calls_raw:
+            assistant_msg["tool_calls"] = tool_calls_raw
+        messages.append(assistant_msg)
+
+        if tool_calls_raw:
+            for i, tool_call in enumerate(tool_calls_raw):
+                func_name = tool_call["function"]["name"]
+                args = parse_tool_arguments(tool_call)
+                tool_call_id = tool_call.get("id", f"call_{i}")
+
+                if show_tool_calls:
+                    console.print()
+                    display_tool_call(func_name, args)
+
+                result = execute_tool(func_name, args)
+                result_str = result if isinstance(result, str) else str(result)
+
+                if show_tool_calls:
+                    display_tool_result(result_str)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": func_name,
+                    "content": result_str,
+                })
+
+            if show_tool_calls:
+                console.print()
+                display_thinking()
+            continue
+        else:
+            done = True
+            content = message.get("content", "") or ""
+
+            if iteration > 1 and content and not should_stream:
+                console.print()
+                console.print(content)
+
+            # Ensure final assistant message is in history (replace the one we added with tool_calls=None)
+            if messages and messages[-1].get("role") == "assistant":
+                messages[-1] = {"role": "assistant", "content": content}
+
+    return {
+        "messages": messages,
+        "final_response": message.get("content", "") if message else "",
+        "iterations": iteration,
+    }
+
+
 def get_llm_response_simple(messages: list, system_message: str, extra_user_message: Optional[str] = None) -> Optional[str]:
     """Get a single LLM reply (no tools, no streaming). Used for exploratory conversation turns."""
     msgs = [{"role": "system", "content": system_message}]
@@ -1830,9 +1924,12 @@ def write_organized_memory(memory_structure: dict) -> bool:
 
 
 def run_consolidation(messages: list) -> None:
-    """Run memory consolidation: ask the model to update core/context/archive from the conversation."""
+    """Run memory consolidation using an agentic loop: LLM can read memory, then update based on results."""
+    console.print("\n╭─ CONSOLIDATING MEMORY ─" + "─" * 44 + "╮", style="cyan")
+    console.print("│ Reviewing conversation and updating memory..." + " " * 18 + "│")
+    console.print("╰─" + "─" * 68 + "╯\n")
+
     core_content = read_core_memory()
-    # Build conversation summary (last N messages) for context
     last_n = 20
     non_system = [m for m in messages if m.get("role") != "system"]
     recent = non_system[-last_n:] if len(non_system) > last_n else non_system
@@ -1854,7 +1951,7 @@ def run_consolidation(messages: list) -> None:
 4. Move information that is stable but not needed in core to the appropriate context file. Use update_context for flat categories (personal, work, preferences, current-focus). If the user has hierarchical memory (context/work/, context/life/, etc.), use update_specific_context(category, subcategory, content) to update the right file (e.g. work/projects, life/finances). Use add_goal for new goals with timelines.
 5. Optionally archive a short conversation summary or outdated details using archive_memory.
 
-Use the tools: read_core_memory, update_core_memory, read_context, update_context, read_specific_context, update_specific_context, add_goal, archive_memory. Call the tools you need, then stop."""
+Use the tools: read_core_memory, update_core_memory, read_context, update_context, read_specific_context, update_specific_context, add_goal, archive_memory. Call the tools you need (e.g. read_core_memory first to see current state), then update based on what you see. When done, respond without further tool calls."""
 
     user_consolidation_msg = f"""Please consolidate memory.
 
@@ -1872,19 +1969,19 @@ Conversation context (recent messages):
         {"role": "system", "content": consolidation_system},
         {"role": "user", "content": user_consolidation_msg},
     ]
-    console.print(Text("Consolidating memory...", style=STYLE_THINKING))
-    response = call_llm(consolidation_messages, tools=CONSOLIDATION_TOOLS, stream=False)
-    if not response:
-        return
-    message = response["choices"][0]["message"]
-    tool_calls_raw = message.get("tool_calls") or []
-    for i, tool_call in enumerate(tool_calls_raw):
-        func_name = tool_call["function"]["name"]
-        args = parse_tool_arguments(tool_call)
-        console.print()
-        display_tool_call(func_name, args)
-        result = execute_tool(func_name, args)
-        display_tool_result(result)
+
+    result = run_agent_loop(
+        initial_messages=consolidation_messages,
+        tools=CONSOLIDATION_TOOLS,
+        max_iterations=10,
+        stream_first_response=False,
+        show_tool_calls=True,
+    )
+
+    if result["iterations"] >= 10:
+        console.print("\n[yellow]Warning: Consolidation hit max iterations[/yellow]\n")
+
+    console.print("\n✓ Memory consolidation complete\n", style="green")
 
 
 def main():
@@ -1984,79 +2081,14 @@ def main():
             user_content = user_input
         messages.append({"role": "user", "content": user_content})
 
-        # Agentic loop - continue until model stops calling tools
-        iteration = 0
-        while True:
-            iteration += 1
-
-            # Only stream on the first iteration (to show thinking in real-time)
-            use_streaming = (iteration == 1)
-
-            if iteration == 1:
-                console.print()
-                # Use Live for streaming response
-                with Live(Markdown(""), console=console, refresh_per_second=15, transient=False) as live:
-                    response = call_llm(messages, tools=tools, stream=use_streaming, live_display=live)
-            else:
-                response = call_llm(messages, tools=tools, stream=False)
-
-            if not response:
-                console.print("[bold #FF10F0]Failed to get response from LLM[/bold #FF10F0]")
-                break
-
-            message = response["choices"][0]["message"]
-            tool_calls_raw = message.get("tool_calls")
-
-            # If there are tool calls, execute them and loop
-            if tool_calls_raw:
-                # Add assistant message with tool calls to history
-                messages.append({
-                    "role": "assistant",
-                    "content": message.get("content"),
-                    "tool_calls": tool_calls_raw
-                })
-
-                # Execute each tool and add results to history
-                for i, tool_call in enumerate(tool_calls_raw):
-                    func_name = tool_call["function"]["name"]
-                    args = parse_tool_arguments(tool_call)
-                    tool_call_id = tool_call.get("id", f"call_{i}")
-
-                    console.print()
-                    display_tool_call(func_name, args)
-
-                    # Execute tool
-                    result = execute_tool(func_name, args)
-
-                    display_tool_result(result)
-
-                    # Add tool result to messages
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "name": func_name,
-                        "content": result
-                    })
-
-                # Model will think again with the tool results
-                console.print()
-                display_thinking()
-
-            else:
-                # No tool calls - this is the final response
-                content = message.get("content", "")
-
-                if iteration > 1 and content:
-                    # Display the response we already received (don't re-call LLM)
-                    console.print()
-                    console.print(content)
-
-                # Add final assistant response to message history
-                assistant_text = content
-                if assistant_text:
-                    messages.append({"role": "assistant", "content": assistant_text})
-
-                break  # Exit agentic loop
+        result = run_agent_loop(
+            initial_messages=messages,
+            tools=tools,
+            max_iterations=10,
+            stream_first_response=True,
+            show_tool_calls=True,
+        )
+        messages = result["messages"]
 
 
 if __name__ == "__main__":

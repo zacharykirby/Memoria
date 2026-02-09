@@ -5,6 +5,7 @@ Uses a temporary vault directory so no real data is touched.
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -324,3 +325,62 @@ def test_write_organized_memory_path_traversal_prevention(vault_path):
 def test_unknown_tool(execute_tool, vault_path):
     out = execute_tool("nonexistent_tool", {})
     assert "Unknown tool" in out and "nonexistent_tool" in out
+
+
+# --- consolidation agentic loop ---
+
+
+def test_consolidation_is_agentic(vault_path):
+    """Consolidation uses an agentic loop: tool results are fed back to the LLM (read-then-write works)."""
+    from chat import run_agent_loop, CONSOLIDATION_TOOLS
+
+    call_count = 0
+
+    def mock_call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=500):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First response: LLM asks to read core memory
+            return {
+                "choices": [{
+                    "message": {
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call_0",
+                            "function": {"name": "read_core_memory", "arguments": "{}"},
+                        }],
+                    },
+                }],
+            }
+        # Second response: LLM had seen the read result, now responds without more tools
+        return {
+            "choices": [{
+                "message": {
+                    "content": "Memory reviewed.",
+                    "tool_calls": None,
+                },
+            }],
+        }
+
+    initial_messages = [
+        {"role": "system", "content": "Consolidate memory."},
+        {"role": "user", "content": "Conversation summary: user said they like tests."},
+    ]
+
+    with patch("chat.call_llm", side_effect=mock_call_llm):
+        result = run_agent_loop(
+            initial_messages=initial_messages,
+            tools=CONSOLIDATION_TOOLS,
+            max_iterations=10,
+            stream_first_response=False,
+            show_tool_calls=False,
+        )
+
+    assert result["iterations"] == 2, "Loop should run twice: once with tool call, once with final response"
+    assert call_count == 2, "LLM should be called twice (second time with tool result in messages)"
+
+    # Tool result must have been appended so the second LLM call could see it
+    tool_messages = [m for m in result["messages"] if m.get("role") == "tool"]
+    assert len(tool_messages) == 1, "Exactly one tool result should be in history"
+    assert tool_messages[0].get("tool_call_id") == "call_0"
+    assert "Core" in tool_messages[0].get("content", "") or "empty" in tool_messages[0].get("content", "").lower()
