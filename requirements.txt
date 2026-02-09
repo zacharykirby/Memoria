@@ -1,3 +1,4 @@
 dotenv
 rich
 requests
+pytest>=7.0

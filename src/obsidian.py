@@ -606,8 +606,8 @@ def list_memory_notes(subfolder: str = None) -> Dict:
                 # Skip files that can't be read
                 continue
 
-        # Sort by updated date (most recent first)
-        notes.sort(key=lambda x: x.get('updated', ''), reverse=True)
+        # Sort by updated date (most recent first); treat None as ''
+        notes.sort(key=lambda x: x.get('updated') or '', reverse=True)
 
         return {
             "success": True,
