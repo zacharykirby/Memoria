@@ -854,15 +854,23 @@ class StreamingResponse:
 
 def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=500):
     """Call LM Studio API, optionally with streaming"""
+    # When tools are provided, allow enough tokens for tool calls (e.g. update_core_memory
+    # can send ~500 tokens of content in one call). Default 500 would truncate and break parsing.
+    effective_max_tokens = max_tokens
+    if tools and max_tokens == 500:
+        effective_max_tokens = 4096
+
     payload = {
         "messages": messages,
         "temperature": 0.7,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
         "stream": stream
     }
 
     if tools:
         payload["tools"] = tools
+        # Do not set tool_choice: "auto" — some backends then omit or alter the system
+        # message (e.g. replace with tool-only prompt), which drops core memory from context.
 
     try:
         if not stream:
@@ -1963,7 +1971,18 @@ def main():
         if not user_input:
             continue
 
-        messages.append({"role": "user", "content": user_input})
+        # On the first turn, put core memory in the user message too so it stays in context
+        # even if the backend merges/replaces the system prompt when tools are present.
+        if len(messages) == 1:
+            core_block = (
+                "## Core memory (current)\n\n" + core_section + "\n\n---\n\nUser request: "
+                if core_section
+                else "User request: "
+            )
+            user_content = core_block + user_input
+        else:
+            user_content = user_input
+        messages.append({"role": "user", "content": user_content})
 
         # Agentic loop - continue until model stops calling tools
         iteration = 0
