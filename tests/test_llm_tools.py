@@ -27,13 +27,13 @@ def vault_path(tmp_path, monkeypatch):
 @pytest.fixture
 def execute_tool(vault_path):
     """Import execute_tool after env is set so it uses the temp vault."""
-    from chat import execute_tool as _execute_tool
+    from tools import execute_tool as _execute_tool
     return _execute_tool
 
 
 @pytest.fixture
 def parse_tool_arguments():
-    from chat import parse_tool_arguments
+    from tools import parse_tool_arguments
     return parse_tool_arguments
 
 
