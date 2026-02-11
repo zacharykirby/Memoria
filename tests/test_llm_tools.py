@@ -332,7 +332,8 @@ def test_unknown_tool(execute_tool, vault_path):
 
 def test_consolidation_is_agentic(vault_path):
     """Consolidation uses an agentic loop: tool results are fed back to the LLM (read-then-write works)."""
-    from chat import run_agent_loop, CONSOLIDATION_TOOLS
+    from llm import run_agent_loop
+    from tools import CONSOLIDATION_TOOLS
 
     call_count = 0
 
@@ -367,7 +368,7 @@ def test_consolidation_is_agentic(vault_path):
         {"role": "user", "content": "Conversation summary: user said they like tests."},
     ]
 
-    with patch("chat.call_llm", side_effect=mock_call_llm):
+    with patch("llm.call_llm", side_effect=mock_call_llm):
         result = run_agent_loop(
             initial_messages=initial_messages,
             tools=CONSOLIDATION_TOOLS,

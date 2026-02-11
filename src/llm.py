@@ -24,7 +24,11 @@ SYSTEM_MESSAGE_ROLES = {"system"}
 
 
 def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEXT) -> list:
-    """Truncate conversation to most recent messages while preserving system messages."""
+    """Truncate conversation to most recent messages while preserving system messages.
+
+    Truncates at turn boundaries so that assistant messages with tool_calls are
+    never separated from their corresponding tool result messages.
+    """
     if not messages:
         return messages
     from ui import console
@@ -32,9 +36,35 @@ def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEX
     conversation_msgs = [m for m in messages if m.get("role") not in SYSTEM_MESSAGE_ROLES]
     if len(conversation_msgs) <= max_messages:
         return messages
-    kept_conversation = conversation_msgs[-max_messages:]
-    dropped_count = len(conversation_msgs) - max_messages
-    console.print(f"[dim]Truncated {dropped_count} old messages to stay within context limit[/dim]")
+
+    # Find safe cut points: indices where a new turn starts.
+    # A turn starts at each "user" message, or at an "assistant" message that
+    # is NOT immediately preceded by a tool result (i.e., it's a final response
+    # rather than a continuation after tool calls).
+    # We never cut between an assistant tool_calls message and its tool results.
+    cut_points = []
+    for i, msg in enumerate(conversation_msgs):
+        role = msg.get("role", "")
+        if role == "user":
+            cut_points.append(i)
+        elif role == "assistant" and i > 0 and conversation_msgs[i - 1].get("role") != "tool":
+            cut_points.append(i)
+
+    # Find the earliest cut point that keeps <= max_messages from the end
+    best_cut = len(conversation_msgs) - max_messages
+    chosen_cut = 0
+    for cp in cut_points:
+        if cp >= best_cut:
+            chosen_cut = cp
+            break
+    else:
+        # All cut points are before best_cut; use the last one to keep as much as possible
+        chosen_cut = cut_points[-1] if cut_points else best_cut
+
+    kept_conversation = conversation_msgs[chosen_cut:]
+    dropped_count = len(conversation_msgs) - len(kept_conversation)
+    if dropped_count > 0:
+        console.print(f"[dim]Truncated {dropped_count} old messages to stay within context limit[/dim]")
     return system_msgs + kept_conversation
 
 

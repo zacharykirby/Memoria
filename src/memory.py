@@ -385,6 +385,12 @@ def update_specific_context(category: str, subcategory: str, content: str) -> Di
     if not category or not subcategory:
         return {"success": False, "error": "category and subcategory are required"}
 
+    context_dir = root / CONTEXT_FOLDER
+    file_key = f"{category}/{subcategory}"
+    is_valid, error_msg = _validate_memory_file_path(file_key, context_dir)
+    if not is_valid:
+        return {"success": False, "error": error_msg}
+
     path = root / CONTEXT_FOLDER / category / f"{subcategory}.md"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
