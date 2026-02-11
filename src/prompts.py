@@ -420,7 +420,8 @@ Use the tools: read_core_memory, update_core_memory, read_context, update_contex
 
 def build_consolidation_user_message(conversation_messages: list, current_memory: str) -> str:
     """Build the consolidation user prompt with conversation and memory context."""
-    last_n = 20
+    last_n = 40
+    max_content_len = 500
     non_system = [m for m in conversation_messages if m.get("role") != "system"]
     recent = non_system[-last_n:] if len(non_system) > last_n else non_system
     conv_summary = []
@@ -430,7 +431,7 @@ def build_consolidation_user_message(conversation_messages: list, current_memory
         if not content and m.get("tool_calls"):
             content = "[model used tools]"
         if content:
-            conv_summary.append(f"{role}: {content[:200]}{'...' if len(content) > 200 else ''}")
+            conv_summary.append(f"{role}: {content[:max_content_len]}{'...' if len(content) > max_content_len else ''}")
     conversation_snippet = "\n".join(conv_summary) if conv_summary else "(no messages)"
 
     return f"""Please consolidate memory.

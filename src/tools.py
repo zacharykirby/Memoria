@@ -374,196 +374,230 @@ def parse_tool_arguments(tool_call: dict) -> dict:
     return {}
 
 
+def _handle_read_core_memory(args):
+    content = read_core_memory()
+    return content if content else "(Core memory is empty.)"
+
+
+def _handle_update_core_memory(args):
+    content = args.get("content")
+    content = str(content) if content is not None else ""
+    result = update_core_memory(content)
+    if result.get("success"):
+        return f"Core memory updated ({result.get('tokens', 0)} tokens)."
+    return f"Error: {result.get('error', 'Unknown error')}"
+
+
+def _handle_read_context(args):
+    category = args.get("category", "")
+    content = read_context(category)
+    if content:
+        return f"**context/{category}.md**\n\n{content}"
+    if category not in CONTEXT_CATEGORIES:
+        return f"Error: Invalid category. Use one of: {', '.join(CONTEXT_CATEGORIES)}"
+    return f"(Context '{category}' is empty.)"
+
+
+def _handle_update_context(args):
+    category = args.get("category", "")
+    content = args.get("content", "")
+    result = update_context(category, content)
+    if result.get("success"):
+        return f"Updated {result.get('filepath', 'context/' + category + '.md')}."
+    return f"Error: {result.get('error', 'Unknown error')}"
+
+
+def _handle_archive_memory(args):
+    content = args.get("content", "")
+    date = args.get("date")
+    result = archive_memory(content, date=date)
+    if result.get("success"):
+        return f"Archived to {result.get('filepath', 'archive')}."
+    return f"Error: {result.get('error', 'Unknown error')}"
+
+
+def _handle_search_vault(args):
+    query = args.get("query")
+    tags = args.get("tags")
+    folder = args.get("folder")
+
+    if not query:
+        return "Error: No search query provided"
+
+    result = search_vault(query, tags=tags, folder=folder)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    results = result.get("results", [])
+    total_found = result.get("total_found", len(results))
+
+    if not results:
+        filter_info = ""
+        if tags:
+            filter_info += f" with tags {tags}"
+        if folder:
+            filter_info += f" in folder '{folder}'"
+        return f"No notes found matching '{query}'{filter_info}"
+
+    response_lines = [f"Found {total_found} note(s) matching '{query}':"]
+    for i, note in enumerate(results, 1):
+        response_lines.append(f"\n{i}. **{note['title']}**")
+        response_lines.append(f"   Path: {note['filepath']}")
+        if note.get('tags'):
+            response_lines.append(f"   Tags: {', '.join(note['tags'])}")
+        response_lines.append(f"   Preview: {note['preview']}")
+
+    if total_found > len(results):
+        response_lines.append(f"\n(Showing top {len(results)} of {total_found} results)")
+
+    return "\n".join(response_lines)
+
+
+def _handle_create_memory_note(args):
+    title = args.get("title")
+    content = args.get("content")
+    subfolder = args.get("subfolder")
+    topics = args.get("topics")
+
+    if not title or not content:
+        return "Error: Both title and content are required"
+
+    result = create_memory_note(title, content, subfolder=subfolder, topics=topics)
+    if result.get("success"):
+        return result["message"]
+    return f"Error: {result['error']}"
+
+
+def _handle_read_memory_note(args):
+    filename = args.get("filename")
+    if not filename:
+        return "Error: filename is required"
+
+    result = read_memory_note(filename)
+    if result.get("success"):
+        response = f"**{result['filepath']}**\n\n"
+        if result.get("metadata"):
+            metadata = result["metadata"]
+            if metadata.get("created"):
+                response += f"Created: {metadata['created']}\n"
+            if metadata.get("updated"):
+                response += f"Updated: {metadata['updated']}\n"
+            if metadata.get("topics"):
+                response += f"Topics: {', '.join(metadata['topics'])}\n"
+            response += "\n"
+        response += result["content"]
+        return response
+    return f"Error: {result['error']}"
+
+
+def _handle_update_memory_note(args):
+    filename = args.get("filename")
+    new_content = args.get("new_content")
+    topics = args.get("topics")
+
+    if not filename or not new_content:
+        return "Error: filename and new_content are required"
+
+    result = update_memory_note(filename, new_content, topics=topics)
+    if result.get("success"):
+        return result["message"]
+    return f"Error: {result['error']}"
+
+
+def _handle_append_to_memory_note(args):
+    filename = args.get("filename")
+    content = args.get("content")
+    if not filename or not content:
+        return "Error: filename and content are required"
+
+    result = append_to_memory_note(filename, content)
+    if result.get("success"):
+        return result["message"]
+    return f"Error: {result['error']}"
+
+
+def _handle_list_memory_notes(args):
+    subfolder = args.get("subfolder")
+    result = list_memory_notes(subfolder=subfolder)
+    if result.get("success"):
+        notes = result.get("notes", [])
+        if not notes:
+            return result.get("message", "No memory notes found")
+        response_lines = [f"Found {result['count']} memory note(s):"]
+        for note in notes:
+            response_lines.append(f"\n- **{note['filepath']}**")
+            if note.get("topics"):
+                response_lines.append(f"  Topics: {', '.join(note['topics'])}")
+            if note.get("updated"):
+                response_lines.append(f"  Updated: {note['updated']}")
+        return "\n".join(response_lines)
+    return f"Error: {result['error']}"
+
+
+def _handle_delete_memory_note(args):
+    filename = args.get("filename")
+    if not filename:
+        return "Error: filename is required"
+
+    result = delete_memory_note(filename)
+    if result.get("success"):
+        return result["message"]
+    return f"Error: {result['error']}"
+
+
+def _handle_read_specific_context(args):
+    category = args.get("category", "")
+    subcategory = args.get("subcategory")
+    content = read_specific_context(category, subcategory)
+    if content:
+        label = f"context/{category}" + (f"/{subcategory}" if subcategory else "") + ".md"
+        return f"**{label}**\n\n{content}"
+    return f"(No content for context/{category}" + (f"/{subcategory}" if subcategory else "") + ")"
+
+
+def _handle_update_specific_context(args):
+    category = args.get("category", "")
+    subcategory = args.get("subcategory", "")
+    content = args.get("content", "")
+    result = update_specific_context(category, subcategory, content)
+    if result.get("success"):
+        return f"Updated {result.get('filepath', 'context file')}."
+    return f"Error: {result.get('error', 'Unknown error')}"
+
+
+def _handle_add_goal(args):
+    goal_description = args.get("goal_description", "")
+    timeline = args.get("timeline", "")
+    goal_type = args.get("goal_type", "current")
+    result = memory_add_goal(goal_description, timeline, goal_type=goal_type)
+    if result.get("success"):
+        return f"Goal added to {result.get('filepath', 'timeline')}."
+    return f"Error: {result.get('error', 'Unknown error')}"
+
+
+_TOOL_DISPATCH = {
+    "read_core_memory": _handle_read_core_memory,
+    "update_core_memory": _handle_update_core_memory,
+    "read_context": _handle_read_context,
+    "update_context": _handle_update_context,
+    "archive_memory": _handle_archive_memory,
+    "search_vault": _handle_search_vault,
+    "create_memory_note": _handle_create_memory_note,
+    "read_memory_note": _handle_read_memory_note,
+    "update_memory_note": _handle_update_memory_note,
+    "append_to_memory_note": _handle_append_to_memory_note,
+    "list_memory_notes": _handle_list_memory_notes,
+    "delete_memory_note": _handle_delete_memory_note,
+    "read_specific_context": _handle_read_specific_context,
+    "update_specific_context": _handle_update_specific_context,
+    "add_goal": _handle_add_goal,
+}
+
+
 def execute_tool(func_name, args):
     """Execute a tool call and return the result."""
-    if func_name == "read_core_memory":
-        content = read_core_memory()
-        return content if content else "(Core memory is empty.)"
-
-    elif func_name == "update_core_memory":
-        content = args.get("content")
-        if content is not None:
-            content = str(content)
-        else:
-            content = ""
-        result = update_core_memory(content)
-        if result.get("success"):
-            return f"Core memory updated ({result.get('tokens', 0)} tokens)."
-        return f"Error: {result.get('error', 'Unknown error')}"
-
-    elif func_name == "read_context":
-        category = args.get("category", "")
-        content = read_context(category)
-        if content:
-            return f"**context/{category}.md**\n\n{content}"
-        if category not in CONTEXT_CATEGORIES:
-            return f"Error: Invalid category. Use one of: {', '.join(CONTEXT_CATEGORIES)}"
-        return f"(Context '{category}' is empty.)"
-
-    elif func_name == "update_context":
-        category = args.get("category", "")
-        content = args.get("content", "")
-        result = update_context(category, content)
-        if result.get("success"):
-            return f"Updated {result.get('filepath', 'context/' + category + '.md')}."
-        return f"Error: {result.get('error', 'Unknown error')}"
-
-    elif func_name == "archive_memory":
-        content = args.get("content", "")
-        date = args.get("date")
-        result = archive_memory(content, date=date)
-        if result.get("success"):
-            return f"Archived to {result.get('filepath', 'archive')}."
-        return f"Error: {result.get('error', 'Unknown error')}"
-
-    elif func_name == "search_vault":
-        query = args.get("query")
-        tags = args.get("tags")
-        folder = args.get("folder")
-
-        if not query:
-            return "Error: No search query provided"
-
-        result = search_vault(query, tags=tags, folder=folder)
-
-        if "error" in result:
-            return f"Error: {result['error']}"
-
-        results = result.get("results", [])
-        total_found = result.get("total_found", len(results))
-
-        if not results:
-            filter_info = ""
-            if tags:
-                filter_info += f" with tags {tags}"
-            if folder:
-                filter_info += f" in folder '{folder}'"
-            return f"No notes found matching '{query}'{filter_info}"
-
-        response_lines = [f"Found {total_found} note(s) matching '{query}':"]
-        for i, note in enumerate(results, 1):
-            response_lines.append(f"\n{i}. **{note['title']}**")
-            response_lines.append(f"   Path: {note['filepath']}")
-            if note.get('tags'):
-                response_lines.append(f"   Tags: {', '.join(note['tags'])}")
-            response_lines.append(f"   Preview: {note['preview']}")
-
-        if total_found > len(results):
-            response_lines.append(f"\n(Showing top {len(results)} of {total_found} results)")
-
-        return "\n".join(response_lines)
-
-    elif func_name == "create_memory_note":
-        title = args.get("title")
-        content = args.get("content")
-        subfolder = args.get("subfolder")
-        topics = args.get("topics")
-
-        if not title or not content:
-            return "Error: Both title and content are required"
-
-        result = create_memory_note(title, content, subfolder=subfolder, topics=topics)
-        if result.get("success"):
-            return result["message"]
-        return f"Error: {result['error']}"
-
-    elif func_name == "read_memory_note":
-        filename = args.get("filename")
-        if not filename:
-            return "Error: filename is required"
-
-        result = read_memory_note(filename)
-        if result.get("success"):
-            response = f"**{result['filepath']}**\n\n"
-            if result.get("metadata"):
-                metadata = result["metadata"]
-                if metadata.get("created"):
-                    response += f"Created: {metadata['created']}\n"
-                if metadata.get("updated"):
-                    response += f"Updated: {metadata['updated']}\n"
-                if metadata.get("topics"):
-                    response += f"Topics: {', '.join(metadata['topics'])}\n"
-                response += "\n"
-            response += result["content"]
-            return response
-        return f"Error: {result['error']}"
-
-    elif func_name == "update_memory_note":
-        filename = args.get("filename")
-        new_content = args.get("new_content")
-        topics = args.get("topics")
-
-        if not filename or not new_content:
-            return "Error: filename and new_content are required"
-
-        result = update_memory_note(filename, new_content, topics=topics)
-        if result.get("success"):
-            return result["message"]
-        return f"Error: {result['error']}"
-
-    elif func_name == "append_to_memory_note":
-        filename = args.get("filename")
-        content = args.get("content")
-        if not filename or not content:
-            return "Error: filename and content are required"
-
-        result = append_to_memory_note(filename, content)
-        if result.get("success"):
-            return result["message"]
-        return f"Error: {result['error']}"
-
-    elif func_name == "list_memory_notes":
-        subfolder = args.get("subfolder")
-        result = list_memory_notes(subfolder=subfolder)
-        if result.get("success"):
-            notes = result.get("notes", [])
-            if not notes:
-                return result.get("message", "No memory notes found")
-            response_lines = [f"Found {result['count']} memory note(s):"]
-            for note in notes:
-                response_lines.append(f"\n- **{note['filepath']}**")
-                if note.get("topics"):
-                    response_lines.append(f"  Topics: {', '.join(note['topics'])}")
-                if note.get("updated"):
-                    response_lines.append(f"  Updated: {note['updated']}")
-            return "\n".join(response_lines)
-        return f"Error: {result['error']}"
-
-    elif func_name == "delete_memory_note":
-        filename = args.get("filename")
-        if not filename:
-            return "Error: filename is required"
-
-        result = delete_memory_note(filename)
-        if result.get("success"):
-            return result["message"]
-        return f"Error: {result['error']}"
-
-    elif func_name == "read_specific_context":
-        category = args.get("category", "")
-        subcategory = args.get("subcategory")
-        content = read_specific_context(category, subcategory)
-        if content:
-            label = f"context/{category}" + (f"/{subcategory}" if subcategory else "") + ".md"
-            return f"**{label}**\n\n{content}"
-        return f"(No content for context/{category}" + (f"/{subcategory}" if subcategory else "") + ")"
-
-    elif func_name == "update_specific_context":
-        category = args.get("category", "")
-        subcategory = args.get("subcategory", "")
-        content = args.get("content", "")
-        result = update_specific_context(category, subcategory, content)
-        if result.get("success"):
-            return f"Updated {result.get('filepath', 'context file')}."
-        return f"Error: {result.get('error', 'Unknown error')}"
-
-    elif func_name == "add_goal":
-        goal_description = args.get("goal_description", "")
-        timeline = args.get("timeline", "")
-        goal_type = args.get("goal_type", "current")
-        result = memory_add_goal(goal_description, timeline, goal_type=goal_type)
-        if result.get("success"):
-            return f"Goal added to {result.get('filepath', 'timeline')}."
-        return f"Error: {result.get('error', 'Unknown error')}"
-
+    handler = _TOOL_DISPATCH.get(func_name)
+    if handler:
+        return handler(args)
     return f"Unknown tool: {func_name}"

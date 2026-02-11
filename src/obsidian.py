@@ -1,9 +1,10 @@
 # obsidian.py
-import os
 import re
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
+
+from memory import MEMORY_FOLDER, _get_vault_path as _memory_get_vault_path
 
 
 def _parse_frontmatter_tags(content: str) -> List[str]:
@@ -100,28 +101,10 @@ def search_vault(query: str, tags: Optional[List[str]] = None, folder: Optional[
     Returns:
         dict with 'results': list of {filepath, title, preview, matches, tags}
     """
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    vault_path = os.getenv("OBSIDIAN_PATH")
-
-    if not vault_path:
+    vault_path, error = _get_vault_path()
+    if error:
         return {
-            "error": "OBSIDIAN_PATH not set in .env file",
-            "results": []
-        }
-
-    vault_path = Path(vault_path)
-
-    if not vault_path.exists():
-        return {
-            "error": f"Vault path does not exist: {vault_path}",
-            "results": []
-        }
-
-    if not vault_path.is_dir():
-        return {
-            "error": f"Vault path is not a directory: {vault_path}",
+            "error": error,
             "results": []
         }
 
@@ -216,9 +199,6 @@ def search_vault(query: str, tags: Optional[List[str]] = None, folder: Optional[
 # ============================================================================
 # AI MEMORY MANAGEMENT
 # ============================================================================
-
-MEMORY_FOLDER = "AI Memory"
-
 
 def _validate_memory_path(filename: str, vault_path: Path) -> tuple:
     """
@@ -315,24 +295,11 @@ def _parse_frontmatter_metadata(content: str) -> Dict:
 
 
 def _get_vault_path() -> tuple:
-    """Get vault path from env. Returns (vault_path, error_msg)"""
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    vault_path = os.getenv("OBSIDIAN_PATH")
-
-    if not vault_path:
-        return None, "OBSIDIAN_PATH not set in .env file"
-
-    vault_path = Path(vault_path)
-
-    if not vault_path.exists():
-        return None, f"Vault path does not exist: {vault_path}"
-
-    if not vault_path.is_dir():
-        return None, f"Vault path is not a directory: {vault_path}"
-
-    return vault_path, None
+    """Get vault path from env. Returns (vault_path, error_msg)."""
+    vault = _memory_get_vault_path()
+    if vault is None:
+        return None, "OBSIDIAN_PATH not set or invalid"
+    return vault, None
 
 
 def create_memory_note(title: str, content: str, subfolder: str = None, topics: List[str] = None) -> Dict:
