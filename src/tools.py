@@ -33,7 +33,7 @@ READ_CORE_MEMORY_TOOL = {
     "type": "function",
     "function": {
         "name": "read_core_memory",
-        "description": "Read current core working memory (core-memory.md). Use to re-read after updates or when you need to check what's stored.",
+        "description": "Read current core working memory (core-memory.md). Call this at the start of any response that touches on personal topics, preferences, ongoing work, or anything the user might expect you to already know. Also use to re-read after updates.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     }
 }
@@ -42,7 +42,7 @@ UPDATE_CORE_MEMORY_TOOL = {
     "type": "function",
     "function": {
         "name": "update_core_memory",
-        "description": "Rewrite core working memory. Content must be under " + str(CORE_MEMORY_MAX_TOKENS) + " tokens. Use to add new info and compress; keep only the most relevant facts.",
+        "description": "Rewrite core working memory. Content must be under " + str(CORE_MEMORY_MAX_TOKENS) + " tokens. Call this after any response where you learned something new and important about the user - don't wait to be asked. Keep only the most relevant facts; compress to stay under the limit.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -57,7 +57,7 @@ READ_CONTEXT_TOOL = {
     "type": "function",
     "function": {
         "name": "read_context",
-        "description": "Read a context file by category. Use when you need stable, categorized information.",
+        "description": "Read a context file by category. Call this when the user asks about work, personal life, preferences, or current projects and core memory doesn't have enough detail.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -112,7 +112,7 @@ SEARCH_VAULT_TOOL = {
     "type": "function",
     "function": {
         "name": "search_vault",
-        "description": "Search the user's Obsidian vault for notes matching a query. Searches both note titles and content.",
+        "description": "Search the user's Obsidian vault for notes matching a query. Call this when the user references a note, document, or topic that might exist in their vault, or asks you to find something. Searches both note titles and content.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -273,7 +273,7 @@ READ_SPECIFIC_CONTEXT_TOOL = {
     "type": "function",
     "function": {
         "name": "read_specific_context",
-        "description": "Read a specific context file or all files in a category. Use for hierarchical memory (context/work/, context/life/, context/interests/).",
+        "description": "Read a specific context file or all files in a category. Use instead of read_context when you know the specific subcategory needed (e.g. work/projects, life/finances). For hierarchical memory (context/work/, context/life/, context/interests/).",
         "parameters": {
             "type": "object",
             "properties": {

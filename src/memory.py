@@ -478,6 +478,40 @@ def load_all_memory() -> Dict:
     return out
 
 
+def build_memory_map() -> str:
+    """
+    Walk AI Memory/context/ and build a directory map for the model.
+    Returns a markdown string describing what context files exist.
+    Automatically reflects the real vault structure - no hardcoding.
+    """
+    vault = _get_vault_path()
+    if not vault:
+        return ""
+
+    base = str(vault / MEMORY_FOLDER / CONTEXT_FOLDER)
+
+    if not os.path.exists(base):
+        return ""
+
+    lines = ["## Memory structure (use this to know where to look)"]
+
+    for root, dirs, files in os.walk(base):
+        dirs.sort()
+        rel = os.path.relpath(root, base)
+        md_files = [f.replace(".md", "") for f in sorted(files) if f.endswith(".md")]
+        if not md_files:
+            continue
+        if rel == ".":
+            lines.append(f"- context/: {', '.join(md_files)}")
+        else:
+            lines.append(f"- context/{rel}/: {', '.join(md_files)}")
+
+    if len(lines) == 1:
+        return ""
+
+    return "\n".join(lines)
+
+
 def get_memory_stats() -> Dict:
     """
     Return token counts for core memory and each context file.

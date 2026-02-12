@@ -13,7 +13,7 @@ from memory import (
     memory_exists,
     delete_ai_memory_folder,
 )
-from prompts import SYSTEM_PROMPT
+from prompts import build_system_prompt
 from tools import CHAT_TOOLS, parse_tool_arguments, execute_tool
 from consolidation import run_consolidation
 from onboarding import (
@@ -71,10 +71,11 @@ def _confirm_reset() -> bool:
 
 
 def _build_system_content(core_section: str) -> str:
-    """Build system message content with current core memory."""
+    """Build system message content with current core memory and live memory map."""
+    base = build_system_prompt()
     if core_section:
-        return SYSTEM_PROMPT + "\n\n## Core memory (current)\n\n" + core_section
-    return SYSTEM_PROMPT + "\n\n## Core memory (current)\n\n(Empty. Use update_core_memory when you learn something about the user.)"
+        return base + "\n\n## Core memory (current)\n\n" + core_section
+    return base + "\n\n## Core memory (current)\n\n(Empty. Use update_core_memory when you learn something about the user.)"
 
 
 def _refresh_system_message(messages: list) -> str:
@@ -157,18 +158,7 @@ def main():
         if not user_input:
             continue
 
-        # On the first turn, put core memory in the user message too so it stays in context
-        # even if the backend merges/replaces the system prompt when tools are present.
-        if len(messages) == 1:
-            core_block = (
-                "## Core memory (current)\n\n" + core_section + "\n\n---\n\nUser request: "
-                if core_section
-                else "User request: "
-            )
-            user_content = core_block + user_input
-        else:
-            user_content = user_input
-        messages.append({"role": "user", "content": user_content})
+        messages.append({"role": "user", "content": user_input})
 
         result = _run_agent_loop(
             messages,

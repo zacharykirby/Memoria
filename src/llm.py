@@ -71,13 +71,14 @@ def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEX
     return system_msgs + kept_conversation
 
 
-def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=500):
+def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=None):
     """Call LM Studio API, optionally with streaming."""
-    # When tools are provided, allow enough tokens for tool calls (e.g. update_core_memory
-    # can send ~500 tokens of content in one call). Default 500 would truncate and break parsing.
-    effective_max_tokens = max_tokens
-    if tools and max_tokens == 500:
+    if tools and max_tokens is None:
         effective_max_tokens = 4096
+    elif max_tokens is None:
+        effective_max_tokens = 500
+    else:
+        effective_max_tokens = max_tokens
 
     payload = {
         "messages": messages,
