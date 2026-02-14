@@ -3,19 +3,22 @@ Tool definitions and execution for the Local Memory Assistant.
 
 Defines all available tools (search, memory operations, etc.) and handles
 tool execution dispatch.
+
+Tool count: 12 (down from 15)
+- Merged flat/hierarchical context tools into unified read_memory / write_memory
+- Merged append_to_memory_note into update_memory_note (append parameter)
+- Replaced add_goal with write_memory (model reads goals, rewrites file)
+- Added read_archive (archives were previously write-only)
 """
 
 import json
 from memory import (
     read_core_memory,
     update_core_memory,
-    read_context,
-    update_context,
+    read_memory_file,
+    write_memory_file,
+    read_archive,
     archive_memory,
-    read_specific_context,
-    update_specific_context,
-    add_goal as memory_add_goal,
-    CONTEXT_CATEGORIES,
     CORE_MEMORY_MAX_TOKENS,
 )
 from obsidian import (
@@ -23,17 +26,17 @@ from obsidian import (
     create_memory_note,
     read_memory_note,
     update_memory_note,
-    append_to_memory_note,
     list_memory_notes,
     delete_memory_note,
 )
 
-# --- Tool definitions ---
+# --- Tool definitions (12 tools) ---
+
 READ_CORE_MEMORY_TOOL = {
     "type": "function",
     "function": {
         "name": "read_core_memory",
-        "description": "Read current core working memory (core-memory.md). Call this at the start of any response that touches on personal topics, preferences, ongoing work, or anything the user might expect you to already know. Also use to re-read after updates.",
+        "description": "Read current core working memory (~500 token summary loaded every conversation). Call this at the start of any response that touches on personal topics, preferences, ongoing work, or anything the user might expect you to already know.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     }
 }
@@ -42,52 +45,53 @@ UPDATE_CORE_MEMORY_TOOL = {
     "type": "function",
     "function": {
         "name": "update_core_memory",
-        "description": "Rewrite core working memory. Content must be under " + str(CORE_MEMORY_MAX_TOKENS) + " tokens. Call this after any response where you learned something new and important about the user - don't wait to be asked. Keep only the most relevant facts; compress to stay under the limit.",
+        "description": "Rewrite core working memory. Content must be under " + str(CORE_MEMORY_MAX_TOKENS) + " tokens. Call this after any response where you learned something new and important about the user. Keep only the most relevant facts; compress to stay under the limit.",
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "Full new content for core-memory.md (markdown). Must be under " + str(CORE_MEMORY_MAX_TOKENS) + " tokens."},
+                "content": {"type": "string", "description": "Full new content for core memory (markdown). Must be under " + str(CORE_MEMORY_MAX_TOKENS) + " tokens."},
             },
             "required": ["content"],
         },
     }
 }
 
-READ_CONTEXT_TOOL = {
+READ_MEMORY_TOOL = {
     "type": "function",
     "function": {
-        "name": "read_context",
-        "description": "Read a context file by category. Call this when the user asks about work, personal life, preferences, or current projects and core memory doesn't have enough detail.",
+        "name": "read_memory",
+        "description": "Read structured memory files. Check the memory map in the system prompt to see what's available. Pass a file path to read one file, or a directory path to read all files in that directory. Paths are relative to AI Memory/.",
         "parameters": {
             "type": "object",
             "properties": {
-                "category": {
+                "path": {
                     "type": "string",
-                    "description": "One of: personal, work, preferences, current-focus",
-                    "enum": list(CONTEXT_CATEGORIES),
+                    "description": "Path relative to AI Memory/ — e.g. 'context/personal', 'context/work/projects', 'timelines/current-goals', or 'context/work' to read all work files",
                 },
             },
-            "required": ["category"],
+            "required": ["path"],
         },
     }
 }
 
-UPDATE_CONTEXT_TOOL = {
+WRITE_MEMORY_TOOL = {
     "type": "function",
     "function": {
-        "name": "update_context",
-        "description": "Update a context file by category. Overwrites the file.",
+        "name": "write_memory",
+        "description": "Write or update a structured memory file. Creates the file and parent directories if needed. Use for context files and timelines (e.g. updating goals). For core memory use update_core_memory instead.",
         "parameters": {
             "type": "object",
             "properties": {
-                "category": {
+                "path": {
                     "type": "string",
-                    "description": "One of: personal, work, preferences, current-focus",
-                    "enum": list(CONTEXT_CATEGORIES),
+                    "description": "Path relative to AI Memory/ — e.g. 'context/work/projects', 'timelines/current-goals'",
                 },
-                "content": {"type": "string", "description": "New content for the context file (markdown)."},
+                "content": {
+                    "type": "string",
+                    "description": "New markdown content for the file (full replacement)",
+                },
             },
-            "required": ["category", "content"],
+            "required": ["path", "content"],
         },
     }
 }
@@ -96,7 +100,7 @@ ARCHIVE_MEMORY_TOOL = {
     "type": "function",
     "function": {
         "name": "archive_memory",
-        "description": "Append content to the archive for a given month. Use for conversation summaries or moving outdated info out of core.",
+        "description": "Append content to the monthly archive. Use for conversation summaries or moving outdated info out of active memory.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -108,11 +112,29 @@ ARCHIVE_MEMORY_TOOL = {
     }
 }
 
+READ_ARCHIVE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_archive",
+        "description": "Read archived conversation summaries. Pass a month (YYYY-MM) to read that archive, or omit to list available months.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Month to read (YYYY-MM). Omit to list available archive months.",
+                },
+            },
+            "required": [],
+        },
+    }
+}
+
 SEARCH_VAULT_TOOL = {
     "type": "function",
     "function": {
         "name": "search_vault",
-        "description": "Search the user's Obsidian vault for notes matching a query. Call this when the user references a note, document, or topic that might exist in their vault, or asks you to find something. Searches both note titles and content.",
+        "description": "Search the user's Obsidian vault for notes matching a query. Use when the user references a note or topic that might exist in their vault. Searches note titles and content. This is a last resort — check memory files first.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -139,7 +161,7 @@ CREATE_MEMORY_NOTE_TOOL = {
     "type": "function",
     "function": {
         "name": "create_memory_note",
-        "description": "Create a new note in the AI Memory/ folder to store information for future reference",
+        "description": "Create a new note in AI Memory/ for long-form information that deserves its own file (topics, people, detailed project notes).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -170,7 +192,7 @@ READ_MEMORY_NOTE_TOOL = {
     "type": "function",
     "function": {
         "name": "read_memory_note",
-        "description": "Read an existing note from the AI Memory/ folder",
+        "description": "Read an existing note from AI Memory/ (includes metadata like created date and topics).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -188,7 +210,7 @@ UPDATE_MEMORY_NOTE_TOOL = {
     "type": "function",
     "function": {
         "name": "update_memory_note",
-        "description": "Replace the entire content of an existing memory note",
+        "description": "Update an existing memory note. Replaces content by default; set append=true to add to the end instead.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -198,37 +220,19 @@ UPDATE_MEMORY_NOTE_TOOL = {
                 },
                 "new_content": {
                     "type": "string",
-                    "description": "New content for the note (markdown)"
+                    "description": "Content to write (replaces existing unless append is true)"
                 },
                 "topics": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Optional updated topic tags"
+                },
+                "append": {
+                    "type": "boolean",
+                    "description": "If true, append content to end instead of replacing. Default false."
                 }
             },
             "required": ["filename", "new_content"]
-        }
-    }
-}
-
-APPEND_TO_MEMORY_NOTE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "append_to_memory_note",
-        "description": "Add content to the end of an existing memory note",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "filename": {
-                    "type": "string",
-                    "description": "Filename relative to AI Memory/ folder"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Content to append (markdown)"
-                }
-            },
-            "required": ["filename", "content"]
         }
     }
 }
@@ -237,7 +241,7 @@ LIST_MEMORY_NOTES_TOOL = {
     "type": "function",
     "function": {
         "name": "list_memory_notes",
-        "description": "List all notes in the AI Memory/ folder",
+        "description": "List all notes in AI Memory/ folder (for discovering notes not shown in the memory map).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -255,7 +259,7 @@ DELETE_MEMORY_NOTE_TOOL = {
     "type": "function",
     "function": {
         "name": "delete_memory_note",
-        "description": "Delete a memory note (use sparingly, only when explicitly requested or content is clearly wrong)",
+        "description": "Delete a memory note. Use sparingly — only when explicitly requested or content is clearly wrong.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -269,81 +273,19 @@ DELETE_MEMORY_NOTE_TOOL = {
     }
 }
 
-READ_SPECIFIC_CONTEXT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "read_specific_context",
-        "description": "Read a specific context file or all files in a category. Use instead of read_context when you know the specific subcategory needed (e.g. work/projects, life/finances). For hierarchical memory (context/work/, context/life/, context/interests/).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "Category: work, life, interests, personal, preferences",
-                },
-                "subcategory": {
-                    "type": "string",
-                    "description": "Specific file (e.g. projects, finances, current-role). Omit to read all files in category.",
-                },
-            },
-            "required": ["category"],
-        },
-    }
-}
+# --- Tool lists for different contexts ---
 
-UPDATE_SPECIFIC_CONTEXT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "update_specific_context",
-        "description": "Update a specific context file (e.g. work/projects, life/finances). Creates file if needed.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "description": "Category: work, life, interests, etc."},
-                "subcategory": {"type": "string", "description": "File name: projects, finances, current-role, etc."},
-                "content": {"type": "string", "description": "New markdown content for the file"},
-            },
-            "required": ["category", "subcategory", "content"],
-        },
-    }
-}
-
-ADD_GOAL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "add_goal",
-        "description": "Add a goal to timeline (current-goals.md or future-plans.md).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "goal_description": {"type": "string", "description": "Description of the goal"},
-                "timeline": {"type": "string", "description": "Timeline or deadline (e.g. 'by June 2026', '1-2 years')"},
-                "goal_type": {
-                    "type": "string",
-                    "description": "current (active goals) or future (longer-term)",
-                    "enum": ["current", "future"],
-                },
-            },
-            "required": ["goal_description", "timeline"],
-        },
-    }
-}
-
-# Tool lists for different contexts
 CHAT_TOOLS = [
     READ_CORE_MEMORY_TOOL,
     UPDATE_CORE_MEMORY_TOOL,
-    READ_CONTEXT_TOOL,
-    UPDATE_CONTEXT_TOOL,
+    READ_MEMORY_TOOL,
+    WRITE_MEMORY_TOOL,
     ARCHIVE_MEMORY_TOOL,
-    READ_SPECIFIC_CONTEXT_TOOL,
-    UPDATE_SPECIFIC_CONTEXT_TOOL,
-    ADD_GOAL_TOOL,
+    READ_ARCHIVE_TOOL,
     SEARCH_VAULT_TOOL,
     CREATE_MEMORY_NOTE_TOOL,
     READ_MEMORY_NOTE_TOOL,
     UPDATE_MEMORY_NOTE_TOOL,
-    APPEND_TO_MEMORY_NOTE_TOOL,
     LIST_MEMORY_NOTES_TOOL,
     DELETE_MEMORY_NOTE_TOOL,
 ]
@@ -351,14 +293,14 @@ CHAT_TOOLS = [
 CONSOLIDATION_TOOLS = [
     READ_CORE_MEMORY_TOOL,
     UPDATE_CORE_MEMORY_TOOL,
-    READ_CONTEXT_TOOL,
-    UPDATE_CONTEXT_TOOL,
-    READ_SPECIFIC_CONTEXT_TOOL,
-    UPDATE_SPECIFIC_CONTEXT_TOOL,
-    ADD_GOAL_TOOL,
+    READ_MEMORY_TOOL,
+    WRITE_MEMORY_TOOL,
     ARCHIVE_MEMORY_TOOL,
+    READ_ARCHIVE_TOOL,
 ]
 
+
+# --- Argument parsing ---
 
 def parse_tool_arguments(tool_call: dict) -> dict:
     """Parse tool call arguments; handle both JSON string and already-parsed dict."""
@@ -374,6 +316,8 @@ def parse_tool_arguments(tool_call: dict) -> dict:
     return {}
 
 
+# --- Tool handlers ---
+
 def _handle_read_core_memory(args):
     content = read_core_memory()
     return content if content else "(Core memory is empty.)"
@@ -388,22 +332,26 @@ def _handle_update_core_memory(args):
     return f"Error: {result.get('error', 'Unknown error')}"
 
 
-def _handle_read_context(args):
-    category = args.get("category", "")
-    content = read_context(category)
+def _handle_read_memory(args):
+    path = args.get("path", "")
+    if not path:
+        return "Error: path is required. Check the memory map for available files."
+    content = read_memory_file(path)
     if content:
-        return f"**context/{category}.md**\n\n{content}"
-    if category not in CONTEXT_CATEGORIES:
-        return f"Error: Invalid category. Use one of: {', '.join(CONTEXT_CATEGORIES)}"
-    return f"(Context '{category}' is empty.)"
+        return f"**{path}**\n\n{content}"
+    return f"(No content at '{path}'. Check the memory map for available files.)"
 
 
-def _handle_update_context(args):
-    category = args.get("category", "")
+def _handle_write_memory(args):
+    path = args.get("path", "")
     content = args.get("content", "")
-    result = update_context(category, content)
+    if not path:
+        return "Error: path is required"
+    if not content:
+        return "Error: content is required"
+    result = write_memory_file(path, content)
     if result.get("success"):
-        return f"Updated {result.get('filepath', 'context/' + category + '.md')}."
+        return f"Updated {result.get('filepath', path)}."
     return f"Error: {result.get('error', 'Unknown error')}"
 
 
@@ -414,6 +362,11 @@ def _handle_archive_memory(args):
     if result.get("success"):
         return f"Archived to {result.get('filepath', 'archive')}."
     return f"Error: {result.get('error', 'Unknown error')}"
+
+
+def _handle_read_archive(args):
+    date = args.get("date")
+    return read_archive(date)
 
 
 def _handle_search_vault(args):
@@ -495,23 +448,12 @@ def _handle_update_memory_note(args):
     filename = args.get("filename")
     new_content = args.get("new_content")
     topics = args.get("topics")
+    append = args.get("append", False)
 
     if not filename or not new_content:
         return "Error: filename and new_content are required"
 
-    result = update_memory_note(filename, new_content, topics=topics)
-    if result.get("success"):
-        return result["message"]
-    return f"Error: {result['error']}"
-
-
-def _handle_append_to_memory_note(args):
-    filename = args.get("filename")
-    content = args.get("content")
-    if not filename or not content:
-        return "Error: filename and content are required"
-
-    result = append_to_memory_note(filename, content)
+    result = update_memory_note(filename, new_content, topics=topics, append=append)
     if result.get("success"):
         return result["message"]
     return f"Error: {result['error']}"
@@ -546,52 +488,21 @@ def _handle_delete_memory_note(args):
     return f"Error: {result['error']}"
 
 
-def _handle_read_specific_context(args):
-    category = args.get("category", "")
-    subcategory = args.get("subcategory")
-    content = read_specific_context(category, subcategory)
-    if content:
-        label = f"context/{category}" + (f"/{subcategory}" if subcategory else "") + ".md"
-        return f"**{label}**\n\n{content}"
-    return f"(No content for context/{category}" + (f"/{subcategory}" if subcategory else "") + ")"
-
-
-def _handle_update_specific_context(args):
-    category = args.get("category", "")
-    subcategory = args.get("subcategory", "")
-    content = args.get("content", "")
-    result = update_specific_context(category, subcategory, content)
-    if result.get("success"):
-        return f"Updated {result.get('filepath', 'context file')}."
-    return f"Error: {result.get('error', 'Unknown error')}"
-
-
-def _handle_add_goal(args):
-    goal_description = args.get("goal_description", "")
-    timeline = args.get("timeline", "")
-    goal_type = args.get("goal_type", "current")
-    result = memory_add_goal(goal_description, timeline, goal_type=goal_type)
-    if result.get("success"):
-        return f"Goal added to {result.get('filepath', 'timeline')}."
-    return f"Error: {result.get('error', 'Unknown error')}"
-
+# --- Dispatch table ---
 
 _TOOL_DISPATCH = {
     "read_core_memory": _handle_read_core_memory,
     "update_core_memory": _handle_update_core_memory,
-    "read_context": _handle_read_context,
-    "update_context": _handle_update_context,
+    "read_memory": _handle_read_memory,
+    "write_memory": _handle_write_memory,
     "archive_memory": _handle_archive_memory,
+    "read_archive": _handle_read_archive,
     "search_vault": _handle_search_vault,
     "create_memory_note": _handle_create_memory_note,
     "read_memory_note": _handle_read_memory_note,
     "update_memory_note": _handle_update_memory_note,
-    "append_to_memory_note": _handle_append_to_memory_note,
     "list_memory_notes": _handle_list_memory_notes,
     "delete_memory_note": _handle_delete_memory_note,
-    "read_specific_context": _handle_read_specific_context,
-    "update_specific_context": _handle_update_specific_context,
-    "add_goal": _handle_add_goal,
 }
 
 

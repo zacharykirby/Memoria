@@ -28,13 +28,15 @@ If you learn something new and useful, update memory after responding. Don't ask
 **Core memory** — always in context at conversation start. Quick essential facts.
 Re-read with read_core_memory if you need to check something after an update.
 
-**Context files** — deeper detail by topic. Use read_specific_context(category, subcategory).
-The memory map at the end of this prompt shows exactly what files exist.
+**Context & timeline files** — deeper detail by topic. Use read_memory(path) where
+path matches the memory map below (e.g. "context/work/projects", "timelines/current-goals").
 When the topic maps to a file, read that file. Don't search_vault for things
-that have a known context file.
+that have a known memory file.
 
 **AI Memory Notes** — long-form notes on specific topics, people, projects.
 Use list_memory_notes to discover what exists, then read_memory_note to load one.
+
+**Archive** — monthly conversation summaries. Use read_archive to look up past context.
 
 **Vault search** — last resort for things not in the memory structure.
 Use search_vault only when you don't know where something lives.
@@ -42,8 +44,8 @@ Use search_vault only when you don't know where something lives.
 ## Memory updates
 
 Update proactively:
-- New fact about their life → update_core_memory or update_specific_context
-- New goal with a timeline → add_goal
+- New fact about their life → update_core_memory or write_memory
+- Goals changed → read timelines with read_memory, then rewrite with write_memory
 - Stale info → archive_memory, then update with current version
 - Something detailed enough to deserve its own note → create_memory_note
 
@@ -442,27 +444,38 @@ Output only valid JSON, no markdown code fence.
 # --- Consolidation ---
 CONSOLIDATION_SYSTEM_PROMPT = """The conversation is ending. Your only job is to consolidate memory. Do not chat or say goodbye.
 
-1. Review the current core memory below.
+1. Read current core memory with read_core_memory.
 2. Summarize what was important in this conversation.
 3. Update core memory with new information if needed (keep under """ + str(CORE_MEMORY_MAX_TOKENS) + """ tokens). Remove or compress outdated items.
-4. Move information that is stable but not needed in core to the appropriate context file. Use update_context for flat categories (personal, work, preferences, current-focus). If the user has hierarchical memory (context/work/, context/life/, etc.), use update_specific_context(category, subcategory, content) to update the right file (e.g. work/projects, life/finances). Use add_goal for new goals with timelines.
-5. Optionally archive a short conversation summary or outdated details using archive_memory.
+4. Move detailed information to the appropriate context or timeline file using write_memory. Read relevant files first with read_memory to avoid overwriting.
+5. Optionally archive a short conversation summary using archive_memory.
 
-Use the tools: read_core_memory, update_core_memory, read_context, update_context, read_specific_context, update_specific_context, add_goal, archive_memory. Call the tools you need (e.g. read_core_memory first to see current state), then update based on what you see. When done, respond without further tool calls."""
+Tools available: read_core_memory, update_core_memory, read_memory, write_memory, archive_memory, read_archive.
+Read before writing. When done, respond without further tool calls."""
 
 
 def build_consolidation_user_message(conversation_messages: list, current_memory: str) -> str:
-    """Build the consolidation user prompt with conversation and memory context."""
-    last_n = 40
-    max_content_len = 500
+    """Build the consolidation user prompt with conversation and memory context.
+
+    Scales to conversation length — short conversations send everything,
+    long conversations are capped.  Tool results are compressed to avoid
+    wasting tokens on already-processed content.
+    """
+    max_messages = 24   # ~12 turns of user/assistant, enough context for consolidation
+    max_content_len = 300
     non_system = [m for m in conversation_messages if m.get("role") != "system"]
-    recent = non_system[-last_n:] if len(non_system) > last_n else non_system
+    recent = non_system[-max_messages:] if len(non_system) > max_messages else non_system
     conv_summary = []
     for m in recent:
         role = m.get("role", "")
         content = (m.get("content") or "").strip()
-        if not content and m.get("tool_calls"):
-            content = "[model used tools]"
+        # Compress tool messages — consolidation doesn't need full tool results
+        if role == "tool":
+            tool_name = m.get("name", "tool")
+            content = f"[{tool_name} result]"
+        elif not content and m.get("tool_calls"):
+            names = ", ".join(tc.get("function", {}).get("name", "?") for tc in m.get("tool_calls", []))
+            content = f"[called {names}]"
         if content:
             conv_summary.append(f"{role}: {content[:max_content_len]}{'...' if len(content) > max_content_len else ''}")
     conversation_snippet = "\n".join(conv_summary) if conv_summary else "(no messages)"

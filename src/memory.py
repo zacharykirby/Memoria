@@ -159,46 +159,13 @@ def update_core_memory(content: str) -> Dict:
 
 
 def read_context(category: str) -> str:
-    """
-    Load a context file. Category must be one of: personal, work, preferences, current-focus.
-    Returns empty string if invalid or on error.
-    """
-    category = (category or "").strip().lower()
-    if category not in CONTEXT_CATEGORIES:
-        return ""
-
-    root = _memory_root()
-    if not root:
-        return ""
-    path = root / CONTEXT_FOLDER / f"{category}.md"
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    """Load a context file by category. Backward-compat wrapper around read_memory_file."""
+    return read_memory_file(f"context/{category}")
 
 
 def update_context(category: str, content: str) -> Dict:
-    """
-    Update a context file. Category must be one of: personal, work, preferences, current-focus.
-    Returns dict with 'success' and optional 'error'.
-    """
-    category = (category or "").strip().lower()
-    if category not in CONTEXT_CATEGORIES:
-        return {"success": False, "error": f"Invalid category. Use one of: {', '.join(CONTEXT_CATEGORIES)}"}
-
-    root = _memory_root()
-    if not root:
-        return {"success": False, "error": "OBSIDIAN_PATH not set or invalid"}
-
-    path = root / CONTEXT_FOLDER / f"{category}.md"
-    try:
-        ensure_memory_structure()
-        path.write_text(content, encoding="utf-8")
-        return {"success": True, "filepath": f"{CONTEXT_FOLDER}/{category}.md"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Update a context file by category. Backward-compat wrapper around write_memory_file."""
+    return write_memory_file(f"context/{category}", content)
 
 
 def archive_memory(content: str, date: Optional[str] = None) -> Dict:
@@ -238,6 +205,143 @@ def _read_file_safe(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
     except Exception:
         return ""
+
+
+def _format_file_entry(filepath: Path) -> str:
+    """Format a file entry with size annotation for large files (>2KB)."""
+    name = filepath.stem
+    try:
+        size = filepath.stat().st_size
+        if size > 2048:
+            return f"{name} ({size // 1024}KB)"
+    except OSError:
+        pass
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Unified memory file access (used by read_memory / write_memory tools)
+# ---------------------------------------------------------------------------
+
+def read_memory_file(path: str) -> str:
+    """
+    Read a memory file or directory by path relative to AI Memory/.
+    Examples: 'context/personal', 'context/work/projects', 'timelines/current-goals'
+    If path points to a directory, returns concatenation of all .md files in it (flat).
+    """
+    root = _memory_root()
+    if not root:
+        return ""
+
+    path = (path or "").strip().strip("/")
+    if not path:
+        return ""
+
+    if ".." in path or path.startswith(("/", "\\", "~")) or ":" in path:
+        return ""
+
+    root_resolved = root.resolve()
+
+    # Check both file (.md) and directory forms
+    file_path = root / f"{path}.md"
+    dir_path = root / path
+
+    try:
+        file_path.resolve().relative_to(root_resolved)
+    except (ValueError, Exception):
+        return ""
+
+    try:
+        dir_path.resolve().relative_to(root_resolved)
+    except (ValueError, Exception):
+        pass  # dir_path may not exist, that's fine
+
+    # Prefer directory when it exists (contains more specific files)
+    if dir_path.is_dir():
+        bits = []
+        for md_file in sorted(dir_path.glob("*.md")):
+            content = _read_file_safe(md_file)
+            if content:
+                bits.append(f"## {md_file.stem}\n\n{content}")
+        if bits:
+            return "\n\n".join(bits)
+
+    # Fall back to single file
+    if file_path.is_file():
+        return _read_file_safe(file_path)
+
+    return ""
+
+
+def write_memory_file(path: str, content: str) -> Dict:
+    """
+    Write a memory file. Path is relative to AI Memory/ (e.g. 'context/work/projects').
+    Creates parent directories if needed. Blocks writing to core-memory.md and archive/.
+    """
+    root = _memory_root()
+    if not root:
+        return {"success": False, "error": "OBSIDIAN_PATH not set or invalid"}
+
+    path = (path or "").strip().strip("/")
+    if not path:
+        return {"success": False, "error": "path is required"}
+
+    if ".." in path or path.startswith(("/", "\\", "~")) or ":" in path:
+        return {"success": False, "error": f"Invalid path: {path}"}
+
+    # Guard core memory (must use update_core_memory for token limit enforcement)
+    if path.lower().replace("-", "").replace("_", "") in ("corememory",):
+        return {"success": False, "error": "Use update_core_memory to modify core memory (enforces token limit)"}
+
+    # Guard archive (must use archive_memory for append-only semantics)
+    if path.startswith("archive"):
+        return {"success": False, "error": "Use archive_memory to append to archives"}
+
+    file_path = root / f"{path}.md"
+    root_resolved = root.resolve()
+
+    try:
+        file_path.resolve().relative_to(root_resolved)
+    except (ValueError, Exception):
+        return {"success": False, "error": f"Invalid path: {path}"}
+
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text((content or "").strip(), encoding="utf-8")
+        return {"success": True, "filepath": f"{path}.md"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def read_archive(date: Optional[str] = None) -> str:
+    """
+    Read archive content.  If date (YYYY-MM) provided, reads that month's archive.
+    If no date, lists available archive months.
+    """
+    root = _memory_root()
+    if not root:
+        return "(No archived content — vault not configured)"
+
+    archive_dir = root / ARCHIVE_FOLDER
+    if not archive_dir.exists():
+        return "(No archived content)"
+
+    if date:
+        date = date.strip()
+        month_dir = archive_dir / date
+        if not month_dir.exists():
+            return f"(No archive for {date})"
+        parts = []
+        for md_file in sorted(month_dir.glob("*.md")):
+            parts.append(f"## {md_file.stem}\n\n{_read_file_safe(md_file)}")
+        content = "\n\n".join(parts)
+        return content.strip() if content.strip() else f"(Archive for {date} is empty)"
+
+    # List available months
+    months = sorted([d.name for d in archive_dir.iterdir() if d.is_dir()])
+    if not months:
+        return "(No archived content)"
+    return "Available archive months: " + ", ".join(months)
 
 
 def _validate_memory_file_path(file_key: str, base_path: Path) -> tuple[bool, str]:
@@ -332,73 +436,15 @@ def write_organized_memory(memory_structure: Dict) -> Dict:
 
 
 def read_specific_context(category: str, subcategory: Optional[str] = None) -> str:
-    """
-    Read a specific context file or all files in a category.
-    Examples:
-      read_specific_context("work", "projects") -> context/work/projects.md
-      read_specific_context("interests") -> concatenation of context/interests/*.md
-    """
-    root = _memory_root()
-    if not root:
-        return ""
-    context_dir = root / CONTEXT_FOLDER
-    if not context_dir.exists():
-        return ""
-
-    category = (category or "").strip().lower()
-    if not category:
-        return ""
-
+    """Backward-compat wrapper around read_memory_file."""
     if subcategory:
-        subcategory = (subcategory or "").strip().lower()
-        path = context_dir / category / f"{subcategory}.md"
-        if path.exists():
-            return _read_file_safe(path)
-        return ""
-
-    # No subcategory: return all .md under context/category/
-    parts_dir = context_dir / category
-    if not parts_dir.exists() or not parts_dir.is_dir():
-        # Single file context/category.md (legacy)
-        single = context_dir / f"{category}.md"
-        if single.exists():
-            return _read_file_safe(single)
-        return ""
-
-    bits = []
-    for md_file in sorted(parts_dir.glob("*.md")):
-        bits.append(f"## {md_file.stem}\n\n{_read_file_safe(md_file)}")
-    return "\n\n".join(bits) if bits else ""
+        return read_memory_file(f"context/{category}/{subcategory}")
+    return read_memory_file(f"context/{category}")
 
 
 def update_specific_context(category: str, subcategory: str, content: str) -> Dict:
-    """
-    Update a specific context file (e.g. work/projects, life/finances).
-    Creates parent dirs if needed.
-    """
-    root = _memory_root()
-    if not root:
-        return {"success": False, "error": "OBSIDIAN_PATH not set or invalid"}
-
-    category = (category or "").strip().lower()
-    subcategory = (subcategory or "").strip().lower()
-    if not category or not subcategory:
-        return {"success": False, "error": "category and subcategory are required"}
-
-    context_dir = root / CONTEXT_FOLDER
-    file_key = f"{category}/{subcategory}"
-    is_valid, error_msg = _validate_memory_file_path(file_key, context_dir)
-    if not is_valid:
-        return {"success": False, "error": error_msg}
-
-    path = root / CONTEXT_FOLDER / category / f"{subcategory}.md"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text((content or "").strip(), encoding="utf-8")
-        rel = path.relative_to(root)
-        return {"success": True, "filepath": str(rel)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Backward-compat wrapper around write_memory_file."""
+    return write_memory_file(f"context/{category}/{subcategory}", content)
 
 
 def add_goal(goal_description: str, timeline: str, goal_type: str = "current") -> Dict:
@@ -466,45 +512,77 @@ def load_all_memory() -> Dict:
         for md_file in timelines_dir.glob("*.md"):
             out["timelines"][md_file.stem] = _read_file_safe(md_file)
 
-    # Backward compat for callers expecting flat keys (e.g. refresh flow)
+    # Backward compat for callers expecting flat keys (onboarding refresh flow).
+    # Prefer flat file; fall back to concatenation of subdirectory files.
     ctx = out["context"]
-    out["personal"] = ctx.get("personal", "")
-    out["work"] = ctx.get("work", "") or "\n\n".join(
-        f"## {k}\n{v}" for k, v in ctx.items() if k.startswith("work/") and v
-    )
-    out["current_focus"] = ctx.get("current-focus", "") or out["timelines"].get("current-goals", "")
-    out["preferences"] = ctx.get("preferences", "")
+    for flat_key, compat_key in (
+        ("personal", "personal"),
+        ("work", "work"),
+        ("preferences", "preferences"),
+        ("current-focus", "current_focus"),
+    ):
+        flat_val = ctx.get(flat_key, "")
+        if flat_val:
+            out[compat_key] = flat_val
+        else:
+            # Concatenate subdirectory files (e.g. work/current-role + work/projects)
+            sub_vals = [v for k, v in ctx.items() if k.startswith(f"{flat_key}/") and v]
+            out[compat_key] = "\n\n".join(sub_vals)
+
+    # Also expose timelines as current_focus if the flat file is empty
+    if not out.get("current_focus"):
+        out["current_focus"] = out["timelines"].get("current-goals", "")
 
     return out
 
 
 def build_memory_map() -> str:
     """
-    Walk AI Memory/context/ and build a directory map for the model.
-    Returns a markdown string describing what context files exist.
-    Automatically reflects the real vault structure - no hardcoding.
+    Walk AI Memory/ and build a directory map for the model.
+    Shows context files, timelines, and archive months with file sizes.
+    Automatically reflects the real vault structure — no hardcoding.
     """
     vault = _get_vault_path()
     if not vault:
         return ""
 
-    base = str(vault / MEMORY_FOLDER / CONTEXT_FOLDER)
-
-    if not os.path.exists(base):
+    mem_root = vault / MEMORY_FOLDER
+    if not mem_root.exists():
         return ""
 
-    lines = ["## Memory structure (use this to know where to look)"]
+    lines = ["## Memory map (files available — use read_memory to load)"]
 
-    for root, dirs, files in os.walk(base):
-        dirs.sort()
-        rel = os.path.relpath(root, base)
-        md_files = [f.replace(".md", "") for f in sorted(files) if f.endswith(".md")]
-        if not md_files:
-            continue
-        if rel == ".":
-            lines.append(f"- context/: {', '.join(md_files)}")
-        else:
-            lines.append(f"- context/{rel}/: {', '.join(md_files)}")
+    # Context files
+    context_dir = mem_root / CONTEXT_FOLDER
+    if context_dir.exists():
+        for walk_root, dirs, files in os.walk(str(context_dir)):
+            dirs.sort()
+            rel = os.path.relpath(walk_root, str(context_dir))
+            md_files = sorted(
+                [Path(walk_root) / f for f in files if f.endswith(".md")]
+            )
+            if not md_files:
+                continue
+            entries = [_format_file_entry(f) for f in md_files]
+            if rel == ".":
+                lines.append(f"- context/: {', '.join(entries)}")
+            else:
+                lines.append(f"- context/{rel}/: {', '.join(entries)}")
+
+    # Timeline files
+    timelines_dir = mem_root / TIMELINES_FOLDER
+    if timelines_dir.exists():
+        tl_files = sorted(timelines_dir.glob("*.md"))
+        if tl_files:
+            entries = [_format_file_entry(f) for f in tl_files]
+            lines.append(f"- timelines/: {', '.join(entries)}")
+
+    # Archive months (just list, not content)
+    archive_dir = mem_root / ARCHIVE_FOLDER
+    if archive_dir.exists():
+        months = sorted([d.name for d in archive_dir.iterdir() if d.is_dir()])
+        if months:
+            lines.append(f"- archive/: {', '.join(months)}")
 
     if len(lines) == 1:
         return ""
@@ -514,11 +592,11 @@ def build_memory_map() -> str:
 
 def get_memory_stats() -> Dict:
     """
-    Return token counts for core memory and each context file.
-    Keys: core_tokens, core_chars, context_tokens (dict by category), context_chars (dict).
+    Return token counts for core memory and each context/timeline file.
+    Keys: core_tokens, core_chars, context_tokens (dict by path), context_chars (dict).
     """
     root = _memory_root()
-    out = {
+    out: Dict = {
         "core_tokens": 0,
         "core_chars": 0,
         "context_tokens": {},
@@ -536,18 +614,18 @@ def get_memory_stats() -> Dict:
         except Exception:
             pass
 
-    for cat in CONTEXT_CATEGORIES:
-        path = root / CONTEXT_FOLDER / f"{cat}.md"
-        if path.exists():
+    # Walk all .md files under context/ and timelines/
+    for subdir in (CONTEXT_FOLDER, TIMELINES_FOLDER):
+        base = root / subdir
+        if not base.exists():
+            continue
+        for md_file in base.rglob("*.md"):
             try:
-                text = path.read_text(encoding="utf-8")
-                out["context_chars"][cat] = len(text)
-                out["context_tokens"][cat] = estimate_tokens(text)
+                rel = str(md_file.relative_to(root).with_suffix("")).replace("\\", "/")
+                text = md_file.read_text(encoding="utf-8")
+                out["context_chars"][rel] = len(text)
+                out["context_tokens"][rel] = estimate_tokens(text)
             except Exception:
-                out["context_chars"][cat] = 0
-                out["context_tokens"][cat] = 0
-        else:
-            out["context_chars"][cat] = 0
-            out["context_tokens"][cat] = 0
+                pass
 
     return out

@@ -4,7 +4,7 @@ A lightweight assistant that runs entirely locally and remembers things about yo
 
 ## What it does
 
-- Chats using local LLMs (via LM Studio or any OpenAI-like endpoint)
+- Chats using OpenAI-compatible LLMs (OpenRouter, LM Studio, or any compatible endpoint)
 - **Stores all memory in your Obsidian vault** (Obsidian is the single source of truth)
 - **Hierarchical memory**: core working memory (~500 tokens), context files (flat and nested), timelines (goals), and monthly archive
 - **Core memory is loaded at conversation start**; the model can read/update core, context, timelines, and archive
@@ -22,14 +22,15 @@ Everything is stored in your Obsidian vault, so you can view, edit, and organize
 ## Requirements
 
 - Python 3.8+
-- LM Studio running locally with a tool-capable model (tested with Qwen 3)
+- An OpenAI-compatible LLM endpoint (OpenRouter by default, or LM Studio with a tool-capable model)
 
 ## Usage
 
-1. Start LM Studio and load a model
-2. `pip install -r requirements.txt`
-3. Copy `.env.example` to `.env` and configure:
-   - `LMSTUDIO_URL`: Your LM Studio endpoint (default: `http://localhost:1234`)
+1. `pip install -r requirements.txt`
+2. Copy `.env.example` to `.env` and configure:
+   - `LLM_API_URL`: OpenAI-compatible endpoint base (default: `https://openrouter.ai/api/v1`)
+   - `LLM_MODEL`: Model name (default: `openai/gpt-oss-120b`)
+   - `LLM_API_KEY`: API key (required for OpenRouter; get one at [openrouter.ai](https://openrouter.ai))
    - `OBSIDIAN_PATH`: Path to your Obsidian vault (e.g., `/home/user/Documents/Notes`)
 4. Run the assistant:
    - **Normal chat:** `python src/chat.py`

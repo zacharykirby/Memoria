@@ -60,7 +60,6 @@ def test_parse_tool_arguments_empty(parse_tool_arguments):
 
 
 def test_read_core_memory_empty(execute_tool, vault_path):
-    # New vault has minimal core-memory; read_core_memory returns it or empty message
     out = execute_tool("read_core_memory", {})
     assert "Core Memory" in out or "(Core memory is empty.)" in out or out == "(Core memory is empty.)"
 
@@ -85,37 +84,87 @@ def test_update_core_memory_empty_content(execute_tool, vault_path):
 
 
 def test_update_core_memory_over_limit(execute_tool, vault_path):
-    # 500 token limit, ~4 chars per token -> 2000+ chars fails
     big = "x" * 2500
     out = execute_tool("update_core_memory", {"content": big})
     assert "Error" in out and "exceeds" in out
 
 
-# --- read_context ---
+# --- read_memory (unified context/timelines) ---
 
 
-def test_read_context_empty_category(execute_tool, vault_path):
-    out = execute_tool("read_context", {"category": "personal"})
-    assert "context" in out and "personal" in out
+def test_read_memory_flat_context(execute_tool, vault_path):
+    """Read a flat context file (e.g. context/personal)."""
+    out = execute_tool("read_memory", {"path": "context/personal"})
+    # New vault has a default file with a heading
+    assert "personal" in out.lower() or "Personal" in out
 
 
-def test_read_context_invalid_category(execute_tool, vault_path):
-    out = execute_tool("read_context", {"category": "invalid"})
-    assert "Error" in out and "Invalid category" in out
+def test_read_memory_missing_file(execute_tool, vault_path):
+    out = execute_tool("read_memory", {"path": "context/nonexistent"})
+    assert "No content" in out
 
 
-def test_read_context_with_content(execute_tool, vault_path):
-    execute_tool("update_context", {"category": "work", "content": "Engineer at Acme."})
-    out = execute_tool("read_context", {"category": "work"})
-    assert "Engineer at Acme" in out
+def test_read_memory_after_write(execute_tool, vault_path):
+    execute_tool("write_memory", {"path": "context/work/projects", "content": "Project Alpha."})
+    out = execute_tool("read_memory", {"path": "context/work/projects"})
+    assert "Project Alpha" in out
 
 
-# --- update_context ---
+def test_read_memory_directory(execute_tool, vault_path):
+    """Reading a directory returns all .md files in it."""
+    execute_tool("write_memory", {"path": "context/work/projects", "content": "Project A."})
+    execute_tool("write_memory", {"path": "context/work/current-role", "content": "Engineer."})
+    out = execute_tool("read_memory", {"path": "context/work"})
+    assert "Project A" in out
+    assert "Engineer" in out
 
 
-def test_update_context_success(execute_tool, vault_path):
-    out = execute_tool("update_context", {"category": "preferences", "content": "Concise."})
+def test_read_memory_timelines(execute_tool, vault_path):
+    """Timelines are accessible via read_memory."""
+    (vault_path / "AI Memory" / "timelines").mkdir(parents=True, exist_ok=True)
+    (vault_path / "AI Memory" / "timelines" / "current-goals.md").write_text("- Ship v1", encoding="utf-8")
+    out = execute_tool("read_memory", {"path": "timelines/current-goals"})
+    assert "Ship v1" in out
+
+
+def test_read_memory_no_path(execute_tool, vault_path):
+    out = execute_tool("read_memory", {"path": ""})
+    assert "Error" in out or "No content" in out
+
+
+# --- write_memory ---
+
+
+def test_write_memory_creates_file(execute_tool, vault_path):
+    out = execute_tool("write_memory", {"path": "context/life/finances", "content": "Budget info."})
     assert "Updated" in out
+    assert (vault_path / "AI Memory" / "context" / "life" / "finances.md").exists()
+
+
+def test_write_memory_blocks_core(execute_tool, vault_path):
+    """Cannot overwrite core memory via write_memory (must use update_core_memory)."""
+    out = execute_tool("write_memory", {"path": "core-memory", "content": "Sneaky."})
+    assert "Error" in out and "core" in out.lower()
+
+
+def test_write_memory_blocks_archive(execute_tool, vault_path):
+    """Cannot write to archive via write_memory (must use archive_memory)."""
+    out = execute_tool("write_memory", {"path": "archive/2026-01/conversations", "content": "Sneaky."})
+    assert "Error" in out and "archive" in out.lower()
+
+
+def test_write_memory_path_traversal(execute_tool, vault_path):
+    """Path traversal attempts are blocked."""
+    out = execute_tool("write_memory", {"path": "../../etc/passwd", "content": "Bad."})
+    assert "Error" in out or "Invalid" in out.lower() or "No content" in out
+
+
+def test_write_memory_timelines(execute_tool, vault_path):
+    """Can rewrite timeline files (e.g. goals)."""
+    out = execute_tool("write_memory", {"path": "timelines/current-goals", "content": "- Ship v1\n- Fix bugs"})
+    assert "Updated" in out
+    out = execute_tool("read_memory", {"path": "timelines/current-goals"})
+    assert "Ship v1" in out and "Fix bugs" in out
 
 
 # --- archive_memory ---
@@ -124,6 +173,29 @@ def test_update_context_success(execute_tool, vault_path):
 def test_archive_memory_success(execute_tool, vault_path):
     out = execute_tool("archive_memory", {"content": "Old summary."})
     assert "Archived" in out
+
+
+# --- read_archive ---
+
+
+def test_read_archive_empty(execute_tool, vault_path):
+    out = execute_tool("read_archive", {})
+    assert "No archived content" in out or "Available" in out
+
+
+def test_read_archive_after_archive(execute_tool, vault_path):
+    execute_tool("archive_memory", {"content": "February summary.", "date": "2026-02"})
+    # List months
+    out = execute_tool("read_archive", {})
+    assert "2026-02" in out
+    # Read specific month
+    out = execute_tool("read_archive", {"date": "2026-02"})
+    assert "February summary" in out
+
+
+def test_read_archive_missing_month(execute_tool, vault_path):
+    out = execute_tool("read_archive", {"date": "1999-01"})
+    assert "No archive" in out
 
 
 # --- search_vault ---
@@ -135,7 +207,6 @@ def test_search_vault_no_query(execute_tool, vault_path):
 
 
 def test_search_vault_with_query(execute_tool, vault_path):
-    # Empty vault: no results
     out = execute_tool("search_vault", {"query": "anything"})
     assert "No notes found" in out or "Found" in out
 
@@ -175,7 +246,7 @@ def test_read_memory_note_success(execute_tool, vault_path):
     assert "Secret content" in out
 
 
-# --- update_memory_note ---
+# --- update_memory_note (replace + append) ---
 
 
 def test_update_memory_note_missing_args(execute_tool, vault_path):
@@ -183,7 +254,7 @@ def test_update_memory_note_missing_args(execute_tool, vault_path):
     assert "Error" in out and "required" in out
 
 
-def test_update_memory_note_success(execute_tool, vault_path):
+def test_update_memory_note_replace(execute_tool, vault_path):
     execute_tool("create_memory_note", {"title": "ToUpdate", "content": "Old."})
     out = execute_tool("update_memory_note", {
         "filename": "ToUpdate.md",
@@ -192,20 +263,21 @@ def test_update_memory_note_success(execute_tool, vault_path):
     assert "Updated" in out
     out_read = execute_tool("read_memory_note", {"filename": "ToUpdate.md"})
     assert "New content" in out_read
+    assert "Old." not in out_read
 
 
-# --- append_to_memory_note ---
-
-
-def test_append_to_memory_note_missing_args(execute_tool, vault_path):
-    out = execute_tool("append_to_memory_note", {})
-    assert "Error" in out and "required" in out
-
-
-def test_append_to_memory_note_success(execute_tool, vault_path):
+def test_update_memory_note_append(execute_tool, vault_path):
+    """append=True adds to end instead of replacing."""
     execute_tool("create_memory_note", {"title": "AppendMe", "content": "First."})
-    out = execute_tool("append_to_memory_note", {"filename": "AppendMe.md", "content": " Second."})
-    assert "Updated" in out or "Appended" in out or "Error" not in out
+    out = execute_tool("update_memory_note", {
+        "filename": "AppendMe.md",
+        "new_content": "Second.",
+        "append": True,
+    })
+    assert "Appended" in out or "Updated" in out or "Error" not in out
+    out_read = execute_tool("read_memory_note", {"filename": "AppendMe.md"})
+    assert "First." in out_read
+    assert "Second." in out_read
 
 
 # --- list_memory_notes ---
@@ -243,44 +315,6 @@ def test_delete_memory_note_success(execute_tool, vault_path):
     assert "Error" in out_read
 
 
-# --- read_specific_context ---
-
-
-def test_read_specific_context_no_content(execute_tool, vault_path):
-    out = execute_tool("read_specific_context", {"category": "work", "subcategory": "projects"})
-    assert "No content" in out or "context" in out
-
-
-def test_read_specific_context_with_content(execute_tool, vault_path):
-    execute_tool("update_specific_context", {
-        "category": "work", "subcategory": "projects", "content": "Project A."
-    })
-    out = execute_tool("read_specific_context", {"category": "work", "subcategory": "projects"})
-    assert "Project A" in out
-
-
-# --- update_specific_context ---
-
-
-def test_update_specific_context_success(execute_tool, vault_path):
-    out = execute_tool("update_specific_context", {
-        "category": "work", "subcategory": "goals", "content": "Ship v1."
-    })
-    assert "Updated" in out
-
-
-# --- add_goal ---
-
-
-def test_add_goal_success(execute_tool, vault_path):
-    out = execute_tool("add_goal", {
-        "goal_description": "Finish tests",
-        "timeline": "This week",
-        "goal_type": "current"
-    })
-    assert "Goal added" in out or "Updated" in out or "timeline" in out.lower()
-
-
 # --- write_organized_memory path traversal ---
 
 
@@ -289,11 +323,11 @@ def test_write_organized_memory_path_traversal_prevention(vault_path):
     malicious_memory = {
         "core_memory": "Safe content",
         "context": {
-            "../../etc/passwd": "Malicious content",  # Path traversal
-            "/etc/shadow": "Absolute path",  # Absolute path
-            "work/projects": "Safe content",  # Valid nested path
-            "personal": "Safe content",  # Valid simple path
-            "~/.ssh/keys": "Home directory escape",  # Home dir escape
+            "../../etc/passwd": "Malicious content",
+            "/etc/shadow": "Absolute path",
+            "work/projects": "Safe content",
+            "personal": "Safe content",
+            "~/.ssh/keys": "Home directory escape",
         },
         "timelines": {
             "../../../tmp/bad": "Escape attempt",
@@ -314,7 +348,6 @@ def test_write_organized_memory_path_traversal_prevention(vault_path):
     parent_of_memory = memory_dir.parent
     for bad_file in ["passwd", "shadow", "keys", "bad"]:
         escaped = list(parent_of_memory.rglob(f"*{bad_file}*"))
-        # Only allow matches inside memory_dir, not outside
         outside = [p for p in escaped if memory_dir not in p.parents and p != memory_dir]
         assert not outside, f"Path traversal created file outside AI Memory: {outside}"
 
@@ -331,7 +364,7 @@ def test_unknown_tool(execute_tool, vault_path):
 
 
 def test_consolidation_is_agentic(vault_path):
-    """Consolidation uses an agentic loop: tool results are fed back to the LLM (read-then-write works)."""
+    """Consolidation uses an agentic loop: tool results are fed back to the LLM."""
     from llm import run_agent_loop
     from tools import CONSOLIDATION_TOOLS
 
@@ -341,7 +374,6 @@ def test_consolidation_is_agentic(vault_path):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            # First response: LLM asks to read core memory
             return {
                 "choices": [{
                     "message": {
@@ -353,7 +385,6 @@ def test_consolidation_is_agentic(vault_path):
                     },
                 }],
             }
-        # Second response: LLM had seen the read result, now responds without more tools
         return {
             "choices": [{
                 "message": {
@@ -377,24 +408,22 @@ def test_consolidation_is_agentic(vault_path):
             show_tool_calls=False,
         )
 
-    assert result["iterations"] == 2, "Loop should run twice: once with tool call, once with final response"
-    assert call_count == 2, "LLM should be called twice (second time with tool result in messages)"
+    assert result["iterations"] == 2
+    assert call_count == 2
 
-    # Tool result must have been appended so the second LLM call could see it
     tool_messages = [m for m in result["messages"] if m.get("role") == "tool"]
-    assert len(tool_messages) == 1, "Exactly one tool result should be in history"
+    assert len(tool_messages) == 1
     assert tool_messages[0].get("tool_call_id") == "call_0"
     assert "Core" in tool_messages[0].get("content", "") or "empty" in tool_messages[0].get("content", "").lower()
 
 
-# --- truncate_messages (context window management) ---
+# --- truncate_messages ---
 
 
 def test_truncate_messages():
     """Test message truncation preserves system and keeps recent messages."""
-    from chat import truncate_messages
+    from llm import truncate_messages
 
-    # Build test conversation: system + 60 conversation messages (30 turns)
     messages = [
         {"role": "system", "content": "System prompt"},
         {"role": "user", "content": "Message 1"},
@@ -406,29 +435,24 @@ def test_truncate_messages():
         messages.append({"role": "user", "content": f"Message {i}"})
         messages.append({"role": "assistant", "content": f"Response {i}"})
 
-    # Truncate to 20 messages
     result = truncate_messages(messages, max_messages=20)
 
-    # Verify system message preserved
     assert result[0]["role"] == "system"
     assert result[0]["content"] == "System prompt"
 
-    # Verify only 20 conversation messages kept
     conversation = [m for m in result if m["role"] != "system"]
     assert len(conversation) == 20
 
-    # Verify most recent messages kept
     assert conversation[-1]["content"] == "Response 32"
     assert conversation[-2]["content"] == "Message 32"
 
-    # Verify oldest messages dropped
     assert not any(m.get("content") == "Message 1" for m in result)
     assert not any(m.get("content") == "Response 1" for m in result)
 
 
 def test_truncate_messages_no_truncation_needed():
     """When under limit, messages are returned unchanged."""
-    from chat import truncate_messages
+    from llm import truncate_messages
 
     messages = [
         {"role": "system", "content": "System"},
@@ -441,7 +465,75 @@ def test_truncate_messages_no_truncation_needed():
 
 def test_truncate_messages_empty():
     """Empty list returns empty list."""
-    from chat import truncate_messages
+    from llm import truncate_messages
 
     assert truncate_messages([]) == []
     assert truncate_messages([], max_messages=10) == []
+
+
+# --- build_memory_map ---
+
+
+def test_build_memory_map_includes_timelines(vault_path):
+    """Memory map should include timeline files."""
+    from memory import build_memory_map
+
+    tl_dir = vault_path / "AI Memory" / "timelines"
+    tl_dir.mkdir(parents=True, exist_ok=True)
+    (tl_dir / "current-goals.md").write_text("- Goal 1", encoding="utf-8")
+
+    memory_map = build_memory_map()
+    assert "timelines/" in memory_map
+    assert "current-goals" in memory_map
+
+
+def test_build_memory_map_shows_file_sizes(vault_path):
+    """Large files should show a size annotation."""
+    from memory import build_memory_map
+
+    big_file = vault_path / "AI Memory" / "context" / "work" / "projects.md"
+    big_file.parent.mkdir(parents=True, exist_ok=True)
+    big_file.write_text("x" * 5000, encoding="utf-8")
+
+    memory_map = build_memory_map()
+    assert "KB" in memory_map  # Should show size for the 5KB file
+
+
+# --- read_memory_file / write_memory_file (unit tests) ---
+
+
+def test_read_memory_file_path_traversal(vault_path):
+    """Path traversal in read_memory_file returns empty string."""
+    from memory import read_memory_file
+
+    assert read_memory_file("../../etc/passwd") == ""
+    assert read_memory_file("/etc/shadow") == ""
+    assert read_memory_file("~/.ssh/keys") == ""
+
+
+def test_write_memory_file_path_traversal(vault_path):
+    """Path traversal in write_memory_file returns error."""
+    from memory import write_memory_file
+
+    result = write_memory_file("../../etc/passwd", "bad")
+    assert not result.get("success")
+
+
+def test_read_archive_function(vault_path):
+    """read_archive function works directly."""
+    from memory import read_archive, archive_memory
+
+    # Empty archive
+    out = read_archive()
+    assert "No archived" in out
+
+    # Archive something
+    archive_memory("Test summary.", date="2026-02")
+
+    # List months
+    out = read_archive()
+    assert "2026-02" in out
+
+    # Read specific month
+    out = read_archive("2026-02")
+    assert "Test summary" in out

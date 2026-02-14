@@ -402,14 +402,17 @@ def read_memory_note(filename: str) -> Dict:
         return {"success": False, "error": f"Failed to read file: {str(e)}"}
 
 
-def update_memory_note(filename: str, new_content: str, topics: List[str] = None) -> Dict:
+def update_memory_note(filename: str, new_content: str, topics: List[str] = None, append: bool = False) -> Dict:
     """
-    Replace entire content of memory note, preserving created date.
+    Update a memory note.  By default replaces entire content; set append=True
+    to add content to the end instead.  Preserves created date and updates
+    the 'updated' timestamp.
 
     Args:
         filename: Filename relative to AI Memory/ folder
-        new_content: New content for the note
-        topics: Optional new topics list
+        new_content: Content to write (replacement) or append
+        topics: Optional new/updated topics list
+        append: If True, append new_content to end of existing body
 
     Returns:
         dict with 'success', 'filepath', or 'error'
@@ -439,78 +442,34 @@ def update_memory_note(filename: str, new_content: str, topics: List[str] = None
         if topics is None:
             topics = old_metadata.get('topics')
 
-        # Generate new frontmatter
+        # Generate new frontmatter with updated timestamp
         frontmatter = _format_frontmatter(created=created, topics=topics)
+
+        if append:
+            # Remove old frontmatter from existing content, then append
+            body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', old_content, flags=re.DOTALL)
+            final_body = body + "\n\n" + new_content
+        else:
+            final_body = new_content
 
         # Write updated file
         with open(target_path, 'w', encoding='utf-8') as f:
-            f.write(frontmatter + new_content)
+            f.write(frontmatter + final_body)
 
         relative_path = target_path.relative_to(vault_path)
+        verb = "Appended to" if append else "Updated"
         return {
             "success": True,
             "filepath": str(relative_path),
-            "message": f"Updated note: {relative_path}"
+            "message": f"{verb} note: {relative_path}"
         }
     except Exception as e:
         return {"success": False, "error": f"Failed to update file: {str(e)}"}
 
 
 def append_to_memory_note(filename: str, content: str) -> Dict:
-    """
-    Add content to end of existing memory note.
-
-    Args:
-        filename: Filename relative to AI Memory/ folder
-        content: Content to append
-
-    Returns:
-        dict with 'success', 'filepath', or 'error'
-    """
-    vault_path, error = _get_vault_path()
-    if error:
-        return {"success": False, "error": error}
-
-    # Validate path
-    is_valid, error_msg, target_path = _validate_memory_path(filename, vault_path)
-    if not is_valid:
-        return {"success": False, "error": error_msg}
-
-    # Check if file exists
-    if not target_path.exists():
-        return {"success": False, "error": f"Note not found: {filename}"}
-
-    # Read existing file
-    try:
-        with open(target_path, 'r', encoding='utf-8') as f:
-            old_content = f.read()
-
-        # Update the 'updated' timestamp in frontmatter
-        old_metadata = _parse_frontmatter_metadata(old_content)
-        created = old_metadata.get('created')
-        topics = old_metadata.get('topics')
-
-        # Remove old frontmatter
-        content_without_frontmatter = re.sub(r'^---\s*\n.*?\n---\s*\n', '', old_content, flags=re.DOTALL)
-
-        # Generate new frontmatter with updated timestamp
-        frontmatter = _format_frontmatter(created=created, topics=topics)
-
-        # Append new content
-        new_full_content = frontmatter + content_without_frontmatter + "\n\n" + content
-
-        # Write updated file
-        with open(target_path, 'w', encoding='utf-8') as f:
-            f.write(new_full_content)
-
-        relative_path = target_path.relative_to(vault_path)
-        return {
-            "success": True,
-            "filepath": str(relative_path),
-            "message": f"Appended to note: {relative_path}"
-        }
-    except Exception as e:
-        return {"success": False, "error": f"Failed to append to file: {str(e)}"}
+    """Backward-compat wrapper: append content to a memory note."""
+    return update_memory_note(filename, content, append=True)
 
 
 def list_memory_notes(subfolder: str = None) -> Dict:

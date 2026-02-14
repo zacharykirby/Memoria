@@ -1,12 +1,13 @@
 """
-LLM client for interacting with local models via LM Studio.
+LLM client for OpenAI-compatible chat completion APIs.
 
-Handles API calls, streaming, JSON extraction, and error handling.
+Supports OpenRouter, LM Studio, and any endpoint that follows the OpenAI chat API.
 """
 
 import json
 import os
 import re
+import time
 import requests
 from typing import Optional
 
@@ -15,8 +16,18 @@ from rich.markdown import Markdown
 
 load_dotenv()
 
-URL = os.getenv("LMSTUDIO_URL", "http://localhost:1234")
-LM_STUDIO_URL = f"{URL}/v1/chat/completions"
+# Generic OpenAI-compatible endpoint (default: OpenRouter)
+# Fallback: LMSTUDIO_URL for backward compatibility
+_base = os.getenv("LLM_API_URL") or os.getenv("LMSTUDIO_URL", "https://openrouter.ai/api/v1")
+_base = _base.rstrip("/")
+if _base.endswith("chat/completions"):
+    CHAT_COMPLETIONS_URL = _base
+elif _base.endswith("/v1"):
+    CHAT_COMPLETIONS_URL = f"{_base}/chat/completions"
+else:
+    CHAT_COMPLETIONS_URL = f"{_base}/v1/chat/completions"
+LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("LMSTUDIO_API_KEY")
 
 MAX_MESSAGES_IN_CONTEXT = 50
 CONSOLIDATION_MAX_MESSAGES = 60
@@ -24,6 +35,13 @@ SYSTEM_MESSAGE_ROLES = {"system"}
 
 # Request timeout: (connect_timeout, read_timeout) in seconds
 REQUEST_TIMEOUT = (5, 120)
+
+# Retry configuration
+MAX_RETRIES = 2
+RETRY_BASE_DELAY = 2  # seconds, doubles each retry
+
+# Tool result truncation (prevents a single large result from bloating context)
+MAX_TOOL_RESULT_CHARS = 6000  # ~1500 tokens
 
 
 def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEXT) -> list:
@@ -72,7 +90,7 @@ def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEX
 
 
 def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=None):
-    """Call LM Studio API, optionally with streaming."""
+    """Call OpenAI-compatible chat completions API, optionally with streaming."""
     if tools and max_tokens is None:
         effective_max_tokens = 4096
     elif max_tokens is None:
@@ -81,6 +99,7 @@ def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=N
         effective_max_tokens = max_tokens
 
     payload = {
+        "model": LLM_MODEL,
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": effective_max_tokens,
@@ -92,76 +111,89 @@ def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=N
         # Do not set tool_choice: "auto" — some backends then omit or alter the system
         # message (e.g. replace with tool-only prompt), which drops core memory from context.
 
-    try:
-        if not stream:
-            response = requests.post(LM_STUDIO_URL, json=payload, timeout=REQUEST_TIMEOUT)
+    headers = {}
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            if not stream:
+                response = requests.post(CHAT_COMPLETIONS_URL, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+                response.raise_for_status()
+                return response.json()
+
+            # Streaming mode
+            response = requests.post(CHAT_COMPLETIONS_URL, json=payload, headers=headers, stream=True, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
-            return response.json()
 
-        # Streaming mode
-        response = requests.post(LM_STUDIO_URL, json=payload, stream=True, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
+            full_content = ""
+            tool_calls_accumulated = []
 
-        full_content = ""
-        tool_calls_accumulated = []
+            for line in response.iter_lines():
+                if not line:
+                    continue
 
-        for line in response.iter_lines():
-            if not line:
+                line_text = line.decode('utf-8')
+                if not line_text.startswith("data: "):
+                    continue
+
+                data = line_text[6:]  # Remove "data: " prefix
+
+                if data == "[DONE]":
+                    break
+
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                delta = chunk["choices"][0].get("delta", {})
+
+                # Stream content tokens
+                content = delta.get("content")
+                if content:
+                    full_content += content
+                    if live_display:
+                        live_display.update(Markdown(full_content))
+
+                # Accumulate tool calls (they come in pieces)
+                if "tool_calls" in delta:
+                    for tc in delta["tool_calls"]:
+                        idx = tc.get("index", 0)
+                        while len(tool_calls_accumulated) <= idx:
+                            tool_calls_accumulated.append({
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""}
+                            })
+                        if "id" in tc:
+                            tool_calls_accumulated[idx]["id"] = tc["id"]
+                        if "function" in tc:
+                            func = tc["function"]
+                            if "name" in func and func["name"] is not None:
+                                tool_calls_accumulated[idx]["function"]["name"] += func["name"]
+                            if "arguments" in func and func["arguments"] is not None:
+                                tool_calls_accumulated[idx]["function"]["arguments"] += func["arguments"]
+
+            # Return in format compatible with existing code
+            message = {"content": full_content if full_content else None}
+            if tool_calls_accumulated:
+                message["tool_calls"] = tool_calls_accumulated
+
+            return {"choices": [{"message": message}]}
+
+        except requests.exceptions.RequestException as e:
+            if attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                from ui import console
+                console.print(f"[dim]Request failed ({e.__class__.__name__}), retrying in {delay}s...[/dim]")
+                time.sleep(delay)
                 continue
+            from ui import console
+            console.print(f"[bold magenta]Error calling LLM:[/bold magenta] {e}")
+            return None
 
-            line_text = line.decode('utf-8')
-            if not line_text.startswith("data: "):
-                continue
-
-            data = line_text[6:]  # Remove "data: " prefix
-
-            if data == "[DONE]":
-                break
-
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-
-            delta = chunk["choices"][0].get("delta", {})
-
-            # Stream content tokens
-            content = delta.get("content")
-            if content:
-                full_content += content
-                if live_display:
-                    live_display.update(Markdown(full_content))
-
-            # Accumulate tool calls (they come in pieces)
-            if "tool_calls" in delta:
-                for tc in delta["tool_calls"]:
-                    idx = tc.get("index", 0)
-                    while len(tool_calls_accumulated) <= idx:
-                        tool_calls_accumulated.append({
-                            "id": "",
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""}
-                        })
-                    if "id" in tc:
-                        tool_calls_accumulated[idx]["id"] = tc["id"]
-                    if "function" in tc:
-                        func = tc["function"]
-                        if "name" in func:
-                            tool_calls_accumulated[idx]["function"]["name"] += func["name"]
-                        if "arguments" in func:
-                            tool_calls_accumulated[idx]["function"]["arguments"] += func["arguments"]
-
-        # Return in format compatible with existing code
-        message = {"content": full_content if full_content else None}
-        if tool_calls_accumulated:
-            message["tool_calls"] = tool_calls_accumulated
-
-        return {"choices": [{"message": message}]}
-
-    except requests.exceptions.RequestException as e:
-        from ui import console
-        console.print(f"[bold magenta]Error calling LLM:[/bold magenta] {e}")
-        return None
+    return None
 
 
 def extract_json_from_response(content: str) -> Optional[dict]:
@@ -313,6 +345,13 @@ def run_agent_loop(
 
                 result = execute_tool(func_name, args)
                 result_str = result if isinstance(result, str) else str(result)
+
+                # Truncate oversized tool results to limit context growth
+                if len(result_str) > MAX_TOOL_RESULT_CHARS:
+                    result_str = (
+                        result_str[:MAX_TOOL_RESULT_CHARS]
+                        + f"\n\n[truncated — {len(result_str)} chars total, showing first {MAX_TOOL_RESULT_CHARS}]"
+                    )
 
                 if show_tool_calls:
                     display_tool_result(result_str)

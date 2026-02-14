@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A CLI chatbot that runs on local LLMs (via LM Studio) and persists memory across conversations using an Obsidian vault as the storage backend. The model has tools to read/write a hierarchical memory system and search the user's vault.
+A CLI chatbot that runs on OpenAI-compatible LLM endpoints (OpenRouter, LM Studio, etc.) and persists memory across conversations using an Obsidian vault as the storage backend. The model has tools to read/write a hierarchical memory system and search the user's vault.
 
 ## Commands
 
@@ -15,7 +15,7 @@ python src/chat.py --refresh-memory    # Adaptive Q&A to update existing memory
 python src/chat.py --reset-memory      # Delete all memory, re-run onboarding
 python src/chat.py --explore           # Freeform conversation → structured memory extraction
 
-# Tests (38 tests, all tool-layer; no LLM integration tests)
+# Tests (48 tests, all tool-layer; no LLM integration tests)
 ./venv/bin/python -m pytest tests/ -v
 ./venv/bin/python -m pytest tests/test_llm_tools.py::test_read_core_memory_empty -v
 
@@ -28,7 +28,9 @@ The project uses a venv at `./venv/`. There is no pyproject.toml or setup.py —
 ## Environment
 
 Requires a `.env` file (see `.env.example`):
-- `LMSTUDIO_URL` — LM Studio endpoint (default `http://localhost:1234`)
+- `LLM_API_URL` — OpenAI-compatible endpoint base (default `https://openrouter.ai/api/v1`). Fallback: `LMSTUDIO_URL`.
+- `LLM_MODEL` — Model name (default `openai/gpt-oss-120b`).
+- `LLM_API_KEY` — API key (required for OpenRouter; optional for local endpoints). Fallback: `LMSTUDIO_API_KEY`.
 - `OBSIDIAN_PATH` — absolute path to Obsidian vault (required)
 
 ## Architecture
@@ -36,7 +38,7 @@ Requires a `.env` file (see `.env.example`):
 ### Data flow
 
 ```
-User input → chat.py → llm.py:run_agent_loop → call_llm (LM Studio API)
+User input → chat.py → llm.py:run_agent_loop → call_llm (OpenAI-compatible API)
                                 ↓ (if tool calls)
                         tools.py:execute_tool → memory.py / obsidian.py → vault filesystem
                                 ↓ (tool results fed back)
@@ -46,9 +48,9 @@ User input → chat.py → llm.py:run_agent_loop → call_llm (LM Studio API)
 ### Module responsibilities
 
 - **chat.py** — Entry point, arg parsing, main loop. Builds system message from `build_system_prompt()` + core memory. Triggers consolidation on quit.
-- **llm.py** — `call_llm()` (raw HTTP to LM Studio), `run_agent_loop()` (the agentic tool loop), `truncate_messages()` (turn-boundary-aware context trimming), JSON extraction/repair for truncated LLM output.
-- **memory.py** — All vault read/write operations for hierarchical memory (core, context, timelines, archive). `build_memory_map()` walks the context directory to produce a live directory listing injected into the system prompt.
-- **tools.py** — OpenAI-format tool definitions (15 tools), argument parsing, dispatch table mapping tool names to handler functions. Two tool lists: `CHAT_TOOLS` (all 15) and `CONSOLIDATION_TOOLS` (subset, no memory note ops).
+- **llm.py** — `call_llm()` (raw HTTP to OpenAI-compatible endpoint), `run_agent_loop()` (the agentic tool loop), `truncate_messages()` (turn-boundary-aware context trimming), JSON extraction/repair for truncated LLM output.
+- **memory.py** — All vault read/write operations for hierarchical memory (core, context, timelines, archive). Unified `read_memory_file(path)` / `write_memory_file(path, content)` for all structured files. `build_memory_map()` walks context, timelines, and archive to produce a live directory listing (with file sizes) injected into the system prompt.
+- **tools.py** — OpenAI-format tool definitions (12 tools), argument parsing, dispatch table mapping tool names to handler functions. Two tool lists: `CHAT_TOOLS` (all 12) and `CONSOLIDATION_TOOLS` (subset: core + read/write memory + archive).
 - **prompts.py** — All prompt templates. `SYSTEM_PROMPT` (static string), `build_system_prompt()` (appends live memory map), consolidation/onboarding/exploration prompts.
 - **consolidation.py** — Runs an agentic loop on quit so the model can read-then-write memory updates.
 - **onboarding.py** — First-time setup, adaptive Q&A, exploratory conversation mode, memory extraction from conversation transcripts.
@@ -60,22 +62,23 @@ User input → chat.py → llm.py:run_agent_loop → call_llm (LM Studio API)
 ```
 core-memory.md              ~500 token working memory, loaded every conversation
 context/
-  personal.md, work.md, ... flat categories (read_context / update_context)
-  work/projects.md, ...     nested categories (read_specific_context / update_specific_context)
+  personal.md, work.md, ... flat categories
+  work/projects.md, ...     nested categories      ← all via read_memory / write_memory
 timelines/
-  current-goals.md          active goals (add_goal)
+  current-goals.md          active goals            ← read/rewrite via read_memory / write_memory
   future-plans.md
 archive/
-  YYYY-MM/conversations.md  monthly conversation summaries (archive_memory)
+  YYYY-MM/conversations.md  monthly summaries       ← append via archive_memory, read via read_archive
 ```
 
-Core memory is injected into the system message at startup and refreshed after every agent loop turn. Context files are loaded on demand by the model via tool calls.
+Core memory is injected into the system message at startup and refreshed after every agent loop turn. Context and timeline files are loaded on demand by the model via `read_memory(path)` tool calls. The memory map in the system prompt shows all available files with sizes.
 
 ### Key patterns
 
-- **Agentic loop**: `run_agent_loop()` in llm.py handles both chat and consolidation. It calls the LLM, executes any tool calls, feeds results back, and repeats until the model responds without tools or hits max iterations (10).
+- **Agentic loop**: `run_agent_loop()` in llm.py handles both chat and consolidation. It calls the LLM, executes any tool calls, feeds results back, and repeats until the model responds without tools or hits max iterations (10). Tool results are truncated at 6000 chars (~1500 tokens) to limit context growth.
+- **Retry with backoff**: `call_llm()` retries failed requests up to 2 times with exponential backoff (2s, 4s). Handles transient network errors and 429/500 responses.
 - **System prompt assembly**: `build_system_prompt()` (prompts.py) appends a live memory map from `build_memory_map()` (memory.py). Then `_build_system_content()` (chat.py) appends core memory content. This happens at init and after every turn.
-- **No `tool_choice: "auto"`**: Explicitly omitted because some LM Studio backends replace the system message when it's set, which would drop core memory from context.
+- **No `tool_choice: "auto"`**: Explicitly omitted because some backends replace the system message when it's set, which would drop core memory from context.
 - **Streaming**: Only the first LLM response per user turn is streamed (for UX). Subsequent responses after tool calls are not streamed.
 - **`max_tokens` default**: `None` in `call_llm()` signature. Resolved to 4096 when tools are present, 500 otherwise.
 
