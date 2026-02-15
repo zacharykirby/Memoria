@@ -1,4 +1,4 @@
-# Local Memory Assistant
+# Memoria
 
 A lightweight assistant that runs entirely locally and remembers things about you across conversations.
 
