@@ -669,12 +669,12 @@ def test_soul_in_consolidation_context(vault_path):
     assert "I am Memoria" in msg
 
 
-def test_update_soul_not_in_consolidation_tools():
-    """update_soul should not be in CONSOLIDATION_TOOLS."""
+def test_update_soul_in_consolidation_tools():
+    """update_soul should be in CONSOLIDATION_TOOLS (for soul reflection during consolidation)."""
     from tools import CONSOLIDATION_TOOLS
 
     tool_names = [t["function"]["name"] for t in CONSOLIDATION_TOOLS]
-    assert "update_soul" not in tool_names
+    assert "update_soul" in tool_names
 
 
 def test_update_soul_in_chat_tools():

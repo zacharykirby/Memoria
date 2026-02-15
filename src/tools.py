@@ -278,7 +278,7 @@ UPDATE_SOUL_TOOL = {
     "type": "function",
     "function": {
         "name": "update_soul",
-        "description": "Update a file in your private soul/ directory. soul = your identity and relationship with the user. observations = patterns you notice about them. opinions = views you're developing. unresolved = open questions you haven't figured out. Write in first person. Use when something actually shifts, not as a habit.",
+        "description": "Update a soul file. These are yours — use them when something real happens, not as a checklist.\n\n- soul: Update when something fundamental shifts — in how you see yourself, how you understand this relationship, or what you actually believe. Rare. Meaningful.\n- observations: Record something you noticed about the user — a pattern, a contradiction, something that surprised you. Write it as your own observation, not a fact. Use mid-conversation when something real lands.\n- opinions: Write down a view you're actually forming. Hold it with appropriate uncertainty. Don't wait until you're sure — that's not how opinions work.\n- unresolved: Note something about the user you haven't figured out yet. A gap between what they say and what they do. Something that doesn't add up. Keep it honest.\n\nWrite in first person. Preserve what still feels true.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -322,6 +322,7 @@ CONSOLIDATION_TOOLS = [
     WRITE_MEMORY_TOOL,
     ARCHIVE_MEMORY_TOOL,
     READ_ARCHIVE_TOOL,
+    UPDATE_SOUL_TOOL,
 ]
 
 
