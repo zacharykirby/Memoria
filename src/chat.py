@@ -12,23 +12,18 @@ from memory import (
     ensure_memory_structure,
     memory_exists,
     delete_ai_memory_folder,
+    reset_soul_folder,
 )
-from prompts import build_system_prompt
+from prompts import build_system_prompt, FIRST_CONVERSATION_OPENER, FIRST_CONVERSATION_NOTE
 from tools import CHAT_TOOLS, parse_tool_arguments, execute_tool
 from consolidation import run_consolidation
-from onboarding import (
-    run_memory_initialization,
-    run_exploratory_conversation,
-    extract_memory_from_conversation,
-    write_organized_memory,
-)
 import os
 from dotenv import load_dotenv
 
 from rich.prompt import Prompt
 from rich.text import Text
 
-from ui import console, display_welcome, get_user_input
+from ui import console, display_startup, display_response, get_user_input
 from llm import run_agent_loop, truncate_messages, MAX_MESSAGES_IN_CONTEXT
 
 load_dotenv()
@@ -38,25 +33,20 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Local Memory Assistant")
     parser.add_argument(
-        "--refresh-memory",
-        action="store_true",
-        help="Run adaptive Q&A to refresh existing memory",
-    )
-    parser.add_argument(
         "--reset-memory",
         action="store_true",
-        help="Delete all memory and start fresh",
+        help="Wipe user memory (preserves soul) and start fresh",
     )
     parser.add_argument(
-        "--explore",
+        "--refresh-memory",
         action="store_true",
-        help="Run exploratory conversation to build organized memory",
+        dest="reset_memory",
+        help="Alias for --reset-memory",
     )
     parser.add_argument(
-        "--deep-dive",
+        "--reset-soul",
         action="store_true",
-        dest="explore",
-        help="Alias for --explore",
+        help="Reset Memoria's soul directory to defaults",
     )
     return parser.parse_args()
 
@@ -70,9 +60,11 @@ def _confirm_reset() -> bool:
         return False
 
 
-def _build_system_content(core_section: str) -> str:
+def _build_system_content(core_section: str, first_conversation: bool = False) -> str:
     """Build system message content with current core memory and live memory map."""
     base = build_system_prompt()
+    if first_conversation:
+        return base + "\n\n" + FIRST_CONVERSATION_NOTE + "\n\n## Core memory (current)\n\n(Empty — first conversation.)"
     if core_section:
         return base + "\n\n## Core memory (current)\n\n" + core_section
     return base + "\n\n## Core memory (current)\n\n(Empty. Use update_core_memory when you learn something about the user.)"
@@ -99,51 +91,61 @@ def _run_agent_loop(initial_messages, tools, max_messages_in_context=MAX_MESSAGE
 def main():
     args = parse_args()
 
-    if args.reset_memory:
-        if not _confirm_reset():
+    # Handle soul reset (standalone or combined with --reset-memory)
+    if args.reset_soul:
+        try:
+            confirm = Prompt.ask(
+                "Reset Memoria's soul to defaults? This erases her sense of self.",
+                choices=["yes", "no"],
+                default="no",
+            )
+        except (EOFError, KeyboardInterrupt):
+            confirm = "no"
+        if confirm.lower() != "yes":
             console.print("Cancelled.")
-            return
-        result = delete_ai_memory_folder()
-        if not result.get("success"):
-            console.print(f"[bold #FF10F0]Error: {result.get('error', 'Unknown')}[/bold #FF10F0]")
-            return
-        run_memory_initialization()
-        return
-
-    if args.refresh_memory:
-        run_memory_initialization()
-        return
-
-    if args.explore:
-        conversation = run_exploratory_conversation()
-        if not conversation:
-            console.print("No conversation to process.")
-            return
-        console.print("\n╭─ PROCESSING CONVERSATION ─" + "─" * 40 + "╮")
-        console.print("│ Extracting insights and organizing memory...             │")
-        console.print("╰─" + "─" * 68 + "╯\n")
-        memory_structure = extract_memory_from_conversation(conversation)
-        if memory_structure:
-            init_result = ensure_memory_structure()
-            if init_result.get("success") and write_organized_memory(memory_structure):
-                console.print("Your memory is ready! Let's chat.\n", style="green")
-            else:
-                console.print("[bold #FF10F0]Memory extraction failed or could not write.[/bold #FF10F0]")
+            if not args.reset_memory:
+                return
         else:
-            console.print("[bold #FF10F0]Could not extract memory from conversation. Try again or use --refresh-memory.[/bold #FF10F0]")
-            return
+            result = reset_soul_folder()
+            if not result.get("success"):
+                console.print(f"[bold #FF10F0]Error: {result.get('error', 'Unknown')}[/bold #FF10F0]")
+                return
+            console.print("  Soul reset to defaults.", style="dim")
+            if not args.reset_memory:
+                return
 
-    if not memory_exists():
-        run_memory_initialization()
+    # Handle memory reset (preserves soul/)
+    if args.reset_memory:
+        if memory_exists():
+            if not _confirm_reset():
+                console.print("Cancelled.")
+                return
+            result = delete_ai_memory_folder()
+            if not result.get("success"):
+                console.print(f"[bold #FF10F0]Error: {result.get('error', 'Unknown')}[/bold #FF10F0]")
+                return
+        # Fall through to normal startup (will be treated as first conversation)
 
-    core_section = read_core_memory()
-    display_welcome(core_memory=core_section)
+    # Normal startup
+    first_conversation = not memory_exists()
 
     init_result = ensure_memory_structure()
     if not init_result.get("success"):
-        console.print(f"[bold #FF10F0]Memory init warning: {init_result.get('error', 'Unknown')}[/bold #FF10F0]")
+        console.print(f"[bold #FF10F0]Memory init error: {init_result.get('error', 'Unknown')}[/bold #FF10F0]")
+        return
 
-    messages = [{"role": "system", "content": _build_system_content(core_section)}]
+    core_section = read_core_memory()
+
+    if first_conversation:
+        display_startup()
+        display_response(FIRST_CONVERSATION_OPENER)
+        messages = [
+            {"role": "system", "content": _build_system_content(core_section, first_conversation=True)},
+            {"role": "assistant", "content": FIRST_CONVERSATION_OPENER},
+        ]
+    else:
+        display_startup()
+        messages = [{"role": "system", "content": _build_system_content(core_section)}]
 
     while True:
         user_input = get_user_input()

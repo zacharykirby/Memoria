@@ -5,6 +5,8 @@ Handles reviewing conversation history and updating memory intelligently
 using an agentic loop.
 """
 
+from rich.text import Text
+
 from ui import console
 from llm import run_agent_loop, truncate_messages, CONSOLIDATION_MAX_MESSAGES
 from prompts import CONSOLIDATION_SYSTEM_PROMPT, build_consolidation_user_message
@@ -14,9 +16,7 @@ from memory import read_core_memory
 
 def run_consolidation(messages: list) -> None:
     """Run memory consolidation using an agentic loop: LLM can read memory, then update based on results."""
-    console.print("\n╭─ CONSOLIDATING MEMORY ─" + "─" * 44 + "╮", style="cyan")
-    console.print("│ Reviewing conversation and updating memory..." + " " * 18 + "│")
-    console.print("╰─" + "─" * 68 + "╯\n")
+    console.print(Text("  consolidating...", style="dim"))
 
     core_content = read_core_memory()
     user_consolidation_msg = build_consolidation_user_message(messages, core_content)
@@ -37,6 +37,7 @@ def run_consolidation(messages: list) -> None:
     )
 
     if result["iterations"] >= 10:
-        console.print("\n[yellow]Warning: Consolidation hit max iterations[/yellow]\n")
+        console.print(Text("  consolidation hit max iterations", style="dim #FF10F0"))
 
-    console.print("\n✓ Memory consolidation complete\n", style="green")
+    console.print(Text("  ◆ memory consolidated", style="dim #555555"))
+    console.print()

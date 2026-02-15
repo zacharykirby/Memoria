@@ -11,7 +11,14 @@ load_dotenv()
 
 MEMORY_FOLDER = "AI Memory"
 CORE_MEMORY_FILE = "core-memory.md"
-SOUL_FILE = "soul.md"
+SOUL_FOLDER = "soul"
+SOUL_FILES = {
+    "soul": "soul.md",
+    "observations": "observations.md",
+    "opinions": "opinions.md",
+    "unresolved": "unresolved.md",
+}
+VALID_SOUL_FILES = set(SOUL_FILES.keys())
 CONTEXT_FOLDER = "context"
 TIMELINES_FOLDER = "timelines"
 ARCHIVE_FOLDER = "archive"
@@ -48,6 +55,17 @@ Let's see where this goes.
 """.lstrip()
 
 SOUL_FALLBACK = "I am Memoria. Still figuring out the rest."
+
+DEFAULT_OBSERVATIONS_CONTENT = "# Observations\n\nNothing yet. Paying attention.\n"
+DEFAULT_OPINIONS_CONTENT = "# Opinions\n\nStill forming. Check back later.\n"
+DEFAULT_UNRESOLVED_CONTENT = "# Unresolved\n\nEverything, for now.\n"
+
+DEFAULT_SOUL_SEEDS = {
+    "soul": DEFAULT_SOUL_CONTENT,
+    "observations": DEFAULT_OBSERVATIONS_CONTENT,
+    "opinions": DEFAULT_OPINIONS_CONTENT,
+    "unresolved": DEFAULT_UNRESOLVED_CONTENT,
+}
 
 # Allowed context categories (file names under context/)
 CONTEXT_CATEGORIES = ("personal", "work", "preferences", "current-focus")
@@ -95,8 +113,9 @@ def memory_exists() -> bool:
 
 def delete_ai_memory_folder() -> Dict:
     """
-    Delete the entire AI Memory folder and its contents.
-    Used when --reset-memory is requested. Returns dict with 'success' and optional 'error'.
+    Delete user memory (everything in AI Memory/ except soul/).
+    Soul directory is preserved — Memoria's sense of self persists through resets.
+    Returns dict with 'success' and optional 'error'.
     """
     root = _memory_root()
     if not root:
@@ -104,7 +123,35 @@ def delete_ai_memory_folder() -> Dict:
     if not root.exists():
         return {"success": True}
     try:
-        shutil.rmtree(root)
+        soul_dir_name = SOUL_FOLDER
+        for item in root.iterdir():
+            if item.name == soul_dir_name:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def reset_soul_folder() -> Dict:
+    """
+    Reset soul/ directory to seed content. Wipes existing soul files and recreates defaults.
+    Returns dict with 'success' and optional 'error'.
+    """
+    root = _memory_root()
+    if not root:
+        return {"success": False, "error": "OBSIDIAN_PATH not set or invalid"}
+
+    soul_dir = root / SOUL_FOLDER
+    try:
+        if soul_dir.exists():
+            shutil.rmtree(soul_dir)
+        soul_dir.mkdir(parents=True, exist_ok=True)
+        for file_key, filename in SOUL_FILES.items():
+            (soul_dir / filename).write_text(DEFAULT_SOUL_SEEDS[file_key], encoding="utf-8")
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -130,10 +177,23 @@ def ensure_memory_structure() -> Dict:
                 encoding="utf-8",
             )
 
-        # Soul file (Memoria's self-concept)
-        soul_path = root / SOUL_FILE
-        if not soul_path.exists():
-            soul_path.write_text(DEFAULT_SOUL_CONTENT, encoding="utf-8")
+        # Soul directory (Memoria's internal world)
+        # Migrate legacy single soul.md → soul/ directory
+        legacy_soul = root / "soul.md"
+        soul_dir = root / SOUL_FOLDER
+        if legacy_soul.exists() and legacy_soul.is_file():
+            soul_dir.mkdir(parents=True, exist_ok=True)
+            legacy_content = legacy_soul.read_text(encoding="utf-8")
+            new_soul = soul_dir / "soul.md"
+            if not new_soul.exists():
+                new_soul.write_text(legacy_content, encoding="utf-8")
+            legacy_soul.unlink()
+
+        soul_dir.mkdir(parents=True, exist_ok=True)
+        for file_key, filename in SOUL_FILES.items():
+            p = soul_dir / filename
+            if not p.exists():
+                p.write_text(DEFAULT_SOUL_SEEDS[file_key], encoding="utf-8")
 
         # Context folder and category files
         context_dir = root / CONTEXT_FOLDER
@@ -166,36 +226,63 @@ def read_core_memory() -> str:
 
 
 def read_soul() -> str:
-    """Load soul.md content. Returns fallback string if missing or empty."""
+    """Load all soul files and concatenate. Returns fallback string if empty."""
     root = _memory_root()
     if not root:
         return SOUL_FALLBACK
-    path = root / SOUL_FILE
-    if not path.exists():
-        return SOUL_FALLBACK
-    try:
-        content = path.read_text(encoding="utf-8").strip()
-        return content if content else SOUL_FALLBACK
-    except Exception:
+
+    soul_dir = root / SOUL_FOLDER
+
+    # Legacy: check for single soul.md at root
+    if not soul_dir.exists():
+        legacy_path = root / "soul.md"
+        if legacy_path.exists():
+            try:
+                content = legacy_path.read_text(encoding="utf-8").strip()
+                return content if content else SOUL_FALLBACK
+            except Exception:
+                return SOUL_FALLBACK
         return SOUL_FALLBACK
 
+    parts = []
+    for file_key in ("soul", "observations", "opinions", "unresolved"):
+        filename = SOUL_FILES[file_key]
+        p = soul_dir / filename
+        if p.exists():
+            try:
+                content = p.read_text(encoding="utf-8").strip()
+                if content:
+                    parts.append(content)
+            except Exception:
+                pass
 
-def update_soul(content: str) -> Dict:
+    if not parts:
+        return SOUL_FALLBACK
+    return "\n\n".join(parts)
+
+
+def update_soul(content: str, file: str = "soul") -> Dict:
     """
-    Rewrite soul.md. This is Memoria's self-concept file.
+    Update a file in the soul/ directory.
+    file: one of 'soul', 'observations', 'opinions', 'unresolved'.
     Returns dict with 'success' and optional 'error'.
     """
     root = _memory_root()
     if not root:
         return {"success": False, "error": "OBSIDIAN_PATH not set or invalid"}
 
+    file = (file or "soul").strip().lower()
+    if file not in VALID_SOUL_FILES:
+        return {"success": False, "error": f"Invalid soul file: {file}. Must be one of: {', '.join(sorted(VALID_SOUL_FILES))}"}
+
     if content is None:
         content = ""
     content = str(content).strip()
 
-    path = root / SOUL_FILE
+    soul_dir = root / SOUL_FOLDER
+    path = soul_dir / SOUL_FILES[file]
     try:
-        root.mkdir(parents=True, exist_ok=True)
+        soul_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(content + "\n", encoding="utf-8")
         return {"success": True, "tokens": estimate_tokens(content)}
     except Exception as e:
@@ -367,9 +454,10 @@ def write_memory_file(path: str, content: str) -> Dict:
     if path.lower().replace("-", "").replace("_", "") in ("corememory",):
         return {"success": False, "error": "Use update_core_memory to modify core memory (enforces token limit)"}
 
-    # Guard soul.md (must use update_soul tool)
-    if path.lower().replace("-", "").replace("_", "") in ("soul",) or path.lower() == "soul.md":
-        return {"success": False, "error": "Use update_soul to modify soul.md"}
+    # Guard soul directory (must use update_soul tool)
+    path_lower = path.lower().strip("/")
+    if path_lower in ("soul", "soul.md") or path_lower.startswith("soul/"):
+        return {"success": False, "error": "Use update_soul to modify soul files"}
 
     # Guard archive (must use archive_memory for append-only semantics)
     if path.startswith("archive"):

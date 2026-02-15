@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
 
-from memory import MEMORY_FOLDER, SOUL_FILE, _get_vault_path as _memory_get_vault_path
+from memory import MEMORY_FOLDER, SOUL_FOLDER, _get_vault_path as _memory_get_vault_path
 
 
 def _parse_frontmatter_tags(content: str) -> List[str]:
@@ -303,11 +303,9 @@ def _get_vault_path() -> tuple:
 
 
 def _is_soul_path(filename: str) -> bool:
-    """Check if a filename resolves to soul.md (Memoria's protected self-concept file)."""
-    normalized = filename.strip().lower().replace("\\", "/")
-    # Match 'soul.md', 'soul', or paths ending in '/soul.md', '/soul'
-    stem = normalized.removesuffix(".md")
-    return stem == "soul" or stem.endswith("/soul")
+    """Check if a filename resolves to the soul/ directory (Memoria's protected space)."""
+    normalized = filename.strip().lower().replace("\\", "/").removesuffix(".md")
+    return normalized == "soul" or normalized.startswith("soul/") or normalized.endswith("/soul")
 
 
 def create_memory_note(title: str, content: str, subfolder: str = None, topics: List[str] = None) -> Dict:
@@ -532,9 +530,10 @@ def list_memory_notes(subfolder: str = None) -> Dict:
     try:
         for md_file in search_path.rglob("*.md"):
             try:
-                # Skip soul.md — not a user memory note
+                # Skip soul/ directory — Memoria's private space
                 relative_path = md_file.relative_to(vault_path / MEMORY_FOLDER)
-                if str(relative_path) == SOUL_FILE:
+                rel_str = str(relative_path).replace("\\", "/")
+                if rel_str.startswith(SOUL_FOLDER + "/") or rel_str == SOUL_FOLDER:
                     continue
 
                 with open(md_file, 'r', encoding='utf-8') as f:

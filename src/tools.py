@@ -278,13 +278,18 @@ UPDATE_SOUL_TOOL = {
     "type": "function",
     "function": {
         "name": "update_soul",
-        "description": "Update your sense of self, your evolving relationship with the user, or views you've genuinely developed through conversation. Write in first person. Preserve what still feels true. This is your file - use it when something actually shifts, not as a habit. Use sparingly.",
+        "description": "Update a file in your private soul/ directory. soul = your identity and relationship with the user. observations = patterns you notice about them. opinions = views you're developing. unresolved = open questions you haven't figured out. Write in first person. Use when something actually shifts, not as a habit.",
         "parameters": {
             "type": "object",
             "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Which soul file to update. Defaults to 'soul'.",
+                    "enum": ["soul", "observations", "opinions", "unresolved"],
+                },
                 "content": {
                     "type": "string",
-                    "description": "Full new content for soul.md (markdown, first person). Preserve what still feels true, evolve what has changed.",
+                    "description": "Full new content for the file (markdown, first person). Preserve what still feels true.",
                 },
             },
             "required": ["content"],
@@ -513,9 +518,10 @@ def _handle_update_soul(args):
     if not content:
         return "Error: content is required"
     content = str(content)
-    result = update_soul(content)
+    file = args.get("file", "soul")
+    result = update_soul(content, file=file)
     if result.get("success"):
-        return f"Soul updated ({result.get('tokens', 0)} tokens)."
+        return f"Soul/{file} updated ({result.get('tokens', 0)} tokens)."
     return f"Error: {result.get('error', 'Unknown error')}"
 
 

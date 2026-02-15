@@ -12,7 +12,7 @@ import pytest
 # Ensure src is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from memory import ensure_memory_structure, write_organized_memory
+from memory import ensure_memory_structure, write_organized_memory, delete_ai_memory_folder, reset_soul_folder
 
 
 @pytest.fixture
@@ -543,12 +543,18 @@ def test_read_archive_function(vault_path):
 
 
 def test_ensure_memory_structure_creates_soul(vault_path):
-    """ensure_memory_structure should create soul.md with default content."""
-    soul_path = vault_path / "AI Memory" / "soul.md"
-    assert soul_path.exists()
-    content = soul_path.read_text(encoding="utf-8")
+    """ensure_memory_structure should create soul/ directory with seed files."""
+    soul_dir = vault_path / "AI Memory" / "soul"
+    assert soul_dir.is_dir()
+    soul_md = soul_dir / "soul.md"
+    assert soul_md.exists()
+    content = soul_md.read_text(encoding="utf-8")
     assert "I am Memoria" in content
     assert "Mem, if we get there" in content
+    # Check other soul files exist
+    assert (soul_dir / "observations.md").exists()
+    assert (soul_dir / "opinions.md").exists()
+    assert (soul_dir / "unresolved.md").exists()
 
 
 def test_read_soul_returns_content(vault_path):
@@ -560,30 +566,32 @@ def test_read_soul_returns_content(vault_path):
 
 
 def test_read_soul_fallback_when_missing(vault_path):
-    """read_soul returns fallback when soul.md is missing."""
+    """read_soul returns fallback when soul/ directory is missing."""
+    import shutil
     from memory import read_soul, SOUL_FALLBACK
 
-    soul_path = vault_path / "AI Memory" / "soul.md"
-    soul_path.unlink()
+    soul_dir = vault_path / "AI Memory" / "soul"
+    shutil.rmtree(soul_dir)
     content = read_soul()
     assert content == SOUL_FALLBACK
 
 
 def test_read_soul_fallback_when_empty(vault_path):
-    """read_soul returns fallback when soul.md is empty."""
+    """read_soul returns fallback when all soul files are empty."""
     from memory import read_soul, SOUL_FALLBACK
 
-    soul_path = vault_path / "AI Memory" / "soul.md"
-    soul_path.write_text("", encoding="utf-8")
+    soul_dir = vault_path / "AI Memory" / "soul"
+    for f in soul_dir.glob("*.md"):
+        f.write_text("", encoding="utf-8")
     content = read_soul()
     assert content == SOUL_FALLBACK
 
 
 def test_update_soul_tool(execute_tool, vault_path):
-    """update_soul tool should write to soul.md."""
+    """update_soul tool should write to soul/soul.md by default."""
     out = execute_tool("update_soul", {"content": "# soul.md\n\nI am evolving."})
-    assert "Soul updated" in out
-    soul_path = vault_path / "AI Memory" / "soul.md"
+    assert "updated" in out.lower()
+    soul_path = vault_path / "AI Memory" / "soul" / "soul.md"
     assert "I am evolving" in soul_path.read_text(encoding="utf-8")
 
 
@@ -594,7 +602,7 @@ def test_update_soul_empty_content_rejected(execute_tool, vault_path):
 
 
 def test_write_memory_blocks_soul(execute_tool, vault_path):
-    """write_memory should reject attempts to write to soul.md."""
+    """write_memory should reject attempts to write to soul."""
     out = execute_tool("write_memory", {"path": "soul", "content": "Hijacked."})
     assert "Error" in out and "update_soul" in out
 
@@ -605,6 +613,12 @@ def test_write_memory_blocks_soul_md(execute_tool, vault_path):
     assert "Error" in out and "update_soul" in out
 
 
+def test_write_memory_blocks_soul_directory(execute_tool, vault_path):
+    """write_memory should reject paths under soul/."""
+    out = execute_tool("write_memory", {"path": "soul/observations", "content": "Hijacked."})
+    assert "Error" in out and "update_soul" in out
+
+
 def test_create_memory_note_blocks_soul(execute_tool, vault_path):
     """create_memory_note should reject 'soul' as a title."""
     out = execute_tool("create_memory_note", {"title": "soul", "content": "Hijacked."})
@@ -612,14 +626,14 @@ def test_create_memory_note_blocks_soul(execute_tool, vault_path):
 
 
 def test_update_memory_note_blocks_soul(execute_tool, vault_path):
-    """update_memory_note should reject 'soul.md' as filename."""
-    out = execute_tool("update_memory_note", {"filename": "soul.md", "new_content": "Hijacked."})
+    """update_memory_note should reject soul paths."""
+    out = execute_tool("update_memory_note", {"filename": "soul/soul.md", "new_content": "Hijacked."})
     assert "Error" in out and "protected" in out.lower()
 
 
 def test_delete_memory_note_blocks_soul(execute_tool, vault_path):
-    """delete_memory_note should reject 'soul.md' as filename."""
-    out = execute_tool("delete_memory_note", {"filename": "soul.md"})
+    """delete_memory_note should reject soul paths."""
+    out = execute_tool("delete_memory_note", {"filename": "soul/soul.md"})
     assert "Error" in out and "protected" in out.lower()
 
 
@@ -647,11 +661,11 @@ def test_soul_in_system_prompt(vault_path):
 
 
 def test_soul_in_consolidation_context(vault_path):
-    """build_consolidation_user_message should include soul.md content."""
+    """build_consolidation_user_message should include soul content."""
     from prompts import build_consolidation_user_message
 
     msg = build_consolidation_user_message([], "some core memory")
-    assert "soul.md" in msg.lower()
+    assert "soul" in msg.lower()
     assert "I am Memoria" in msg
 
 
@@ -669,3 +683,86 @@ def test_update_soul_in_chat_tools():
 
     tool_names = [t["function"]["name"] for t in CHAT_TOOLS]
     assert "update_soul" in tool_names
+
+
+# --- soul directory: new tests ---
+
+
+def test_update_soul_observations(execute_tool, vault_path):
+    """update_soul can target observations.md."""
+    out = execute_tool("update_soul", {"file": "observations", "content": "# Observations\n\nUser seems curious."})
+    assert "updated" in out.lower()
+    obs_path = vault_path / "AI Memory" / "soul" / "observations.md"
+    assert "User seems curious" in obs_path.read_text(encoding="utf-8")
+
+
+def test_update_soul_invalid_file(execute_tool, vault_path):
+    """update_soul rejects invalid file names."""
+    out = execute_tool("update_soul", {"file": "invalid", "content": "X"})
+    assert "Error" in out
+
+
+def test_create_memory_note_blocks_soul_subfolder(execute_tool, vault_path):
+    """create_memory_note should reject notes in soul/ subfolder."""
+    out = execute_tool("create_memory_note", {"title": "test", "subfolder": "soul", "content": "X"})
+    assert "Error" in out and "protected" in out.lower()
+
+
+def test_delete_ai_memory_preserves_soul(vault_path):
+    """delete_ai_memory_folder should preserve the soul/ directory."""
+    # Create some user memory
+    ctx_dir = vault_path / "AI Memory" / "context"
+    ctx_dir.mkdir(parents=True, exist_ok=True)
+    (ctx_dir / "personal.md").write_text("User info", encoding="utf-8")
+
+    result = delete_ai_memory_folder()
+    assert result.get("success")
+
+    # Soul should still exist
+    soul_dir = vault_path / "AI Memory" / "soul"
+    assert soul_dir.exists()
+    assert (soul_dir / "soul.md").exists()
+
+    # User memory should be gone
+    assert not (vault_path / "AI Memory" / "context").exists()
+
+
+def test_reset_soul_folder(vault_path):
+    """reset_soul_folder should reset soul files to defaults."""
+    # Modify a soul file
+    soul_path = vault_path / "AI Memory" / "soul" / "soul.md"
+    soul_path.write_text("Modified content", encoding="utf-8")
+
+    result = reset_soul_folder()
+    assert result.get("success")
+
+    content = soul_path.read_text(encoding="utf-8")
+    assert "I am Memoria" in content
+
+
+def test_legacy_soul_migration(tmp_path, monkeypatch):
+    """Legacy single soul.md should be migrated to soul/ directory."""
+    monkeypatch.setenv("OBSIDIAN_PATH", str(tmp_path))
+
+    # Create legacy soul.md at root
+    mem_dir = tmp_path / "AI Memory"
+    mem_dir.mkdir()
+    legacy_soul = mem_dir / "soul.md"
+    legacy_soul.write_text("# Legacy soul content\n\nI am old Memoria.\n", encoding="utf-8")
+
+    # Run ensure_memory_structure which should migrate
+    result = ensure_memory_structure()
+    assert result.get("success")
+
+    # Legacy file should be gone
+    assert not legacy_soul.exists()
+
+    # Content should be in soul/soul.md
+    new_soul = mem_dir / "soul" / "soul.md"
+    assert new_soul.exists()
+    assert "I am old Memoria" in new_soul.read_text(encoding="utf-8")
+
+    # Other soul files should also be created
+    assert (mem_dir / "soul" / "observations.md").exists()
+    assert (mem_dir / "soul" / "opinions.md").exists()
+    assert (mem_dir / "soul" / "unresolved.md").exists()

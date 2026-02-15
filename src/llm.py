@@ -190,7 +190,7 @@ def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=N
                 time.sleep(delay)
                 continue
             from ui import console
-            console.print(f"[bold magenta]Error calling LLM:[/bold magenta] {e}")
+            console.print(f"[dim #FF10F0]Error: {e}[/dim #FF10F0]")
             return None
 
     return None
@@ -297,7 +297,10 @@ def run_agent_loop(
     Run the agentic loop: LLM → tools → LLM → tools → ... → final response.
     Tool results are fed back to the LLM so it can read-then-write and multi-step.
     """
-    from ui import console, display_tool_call, display_tool_result, display_thinking
+    from ui import (
+        console, StreamingDisplay, start_spinner,
+        TOOL_SPINNER_TEXT, display_tool_done, display_error, display_response,
+    )
     from tools import parse_tool_arguments, execute_tool
 
     messages = list(initial_messages)
@@ -311,19 +314,27 @@ def run_agent_loop(
         if truncate_fn:
             messages = truncate_fn(messages, max_messages=max_messages_in_context)
 
-        should_stream = stream_first_response and (iteration == 1)
+        # Stream every iteration when enabled — not just the first.
+        # StreamingDisplay shows ◆ thinking... then transitions to live
+        # Markdown when the first token arrives, regardless of iteration.
+        should_stream = stream_first_response
 
         if should_stream:
-            from rich.live import Live
-            from rich.markdown import Markdown
-            console.print()
-            with Live(Markdown(""), console=console, refresh_per_second=15, transient=False) as live:
-                response = call_llm(messages, tools=tools, stream=True, live_display=live)
+            display = StreamingDisplay()
+            display.start()
+            try:
+                response = call_llm(messages, tools=tools, stream=True, live_display=display)
+            finally:
+                display.stop()
         else:
-            response = call_llm(messages, tools=tools, stream=False)
+            spinner = start_spinner("thinking...")
+            try:
+                response = call_llm(messages, tools=tools, stream=False)
+            finally:
+                spinner.stop()
 
         if not response:
-            console.print("[bold #FF10F0]Failed to get response from LLM[/bold #FF10F0]")
+            display_error("Failed to get response from LLM")
             break
 
         message = response["choices"][0]["message"]
@@ -339,9 +350,10 @@ def run_agent_loop(
                 args = parse_tool_arguments(tool_call)
                 tool_call_id = tool_call.get("id", f"call_{i}")
 
+                tool_spinner = None
                 if show_tool_calls:
-                    console.print()
-                    display_tool_call(func_name, args)
+                    desc = TOOL_SPINNER_TEXT.get(func_name, "thinking...")
+                    tool_spinner = start_spinner(desc)
 
                 result = execute_tool(func_name, args)
                 result_str = result if isinstance(result, str) else str(result)
@@ -353,8 +365,9 @@ def run_agent_loop(
                         + f"\n\n[truncated — {len(result_str)} chars total, showing first {MAX_TOOL_RESULT_CHARS}]"
                     )
 
-                if show_tool_calls:
-                    display_tool_result(result_str)
+                if show_tool_calls and tool_spinner:
+                    tool_spinner.stop()
+                    display_tool_done(func_name, args)
 
                 messages.append({
                     "role": "tool",
@@ -363,17 +376,14 @@ def run_agent_loop(
                     "content": result_str,
                 })
 
-            if show_tool_calls:
-                console.print()
-                display_thinking()
             continue
         else:
             done = True
             content = message.get("content", "") or ""
 
-            if iteration > 1 and content and not should_stream:
-                console.print()
-                console.print(content)
+            # Non-streaming callers (e.g. consolidation) still need explicit display
+            if not should_stream and content:
+                display_response(content)
 
             if messages and messages[-1].get("role") == "assistant":
                 messages[-1] = {"role": "assistant", "content": content}
