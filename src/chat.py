@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from rich.prompt import Prompt
 from rich.text import Text
 
-from ui import console, display_startup, display_response, get_user_input
+from ui import console, display_startup, display_response, display_status, get_user_input
 from llm import run_agent_loop, truncate_messages, MAX_MESSAGES_IN_CONTEXT
 
 load_dotenv()
@@ -75,6 +75,30 @@ def _refresh_system_message(messages: list) -> str:
     core_section = read_core_memory()
     messages[0] = {"role": "system", "content": _build_system_content(core_section)}
     return core_section
+
+
+def _get_session_number() -> int:
+    """Read and increment persistent session counter (stored in vault root)."""
+    vault_path = os.getenv("OBSIDIAN_PATH")
+    if not vault_path:
+        return 1
+    session_file = Path(vault_path) / ".memoria_session"
+    try:
+        n = int(session_file.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        n = 0
+    n += 1
+    try:
+        session_file.write_text(str(n))
+    except OSError:
+        pass
+    return n
+
+
+def _estimate_tokens(messages: list) -> int:
+    """Rough token estimate from message content (~4 chars per token)."""
+    total = sum(len(m.get("content", "") or "") for m in messages)
+    return total // 4
 
 
 def _run_agent_loop(initial_messages, tools, max_messages_in_context=MAX_MESSAGES_IN_CONTEXT, **kwargs):
@@ -135,6 +159,7 @@ def main():
         return
 
     core_section = read_core_memory()
+    session_number = _get_session_number()
 
     if first_conversation:
         display_startup()
@@ -173,6 +198,8 @@ def main():
 
         # Refresh system message so core memory stays current after tool updates
         core_section = _refresh_system_message(messages)
+
+        display_status(_estimate_tokens(messages), session_number)
 
 
 if __name__ == "__main__":

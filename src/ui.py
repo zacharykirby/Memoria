@@ -1,6 +1,7 @@
 """
 UI components and display helpers using Rich.
 Clean, minimal chat interface with subtle cyberpunk accents.
+Input handled by prompt_toolkit for proper multiline / history support.
 """
 
 from rich.console import Console
@@ -10,6 +11,9 @@ from rich.spinner import Spinner
 from rich.text import Text
 from rich.style import Style
 from rich.theme import Theme
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
 
 # ── Theme ──────────────────────────────────────────────────────────────
 
@@ -170,26 +174,49 @@ class StreamingDisplay:
 # ── Display functions ──────────────────────────────────────────────────
 
 def display_startup():
-    """Minimal startup: name + model, nothing else."""
+    """One-line header: app name + model, dim and unobtrusive."""
     console.print()
-    console.print(Text("  memoria", style="bold #00D9FF"))
     try:
         from llm import LLM_MODEL
-        console.print(Text(f"  {LLM_MODEL}", style="dim"))
+        header = Text()
+        header.append("  memoria", style="dim #00D9FF")
+        header.append(f"  //  {LLM_MODEL}", style="dim")
+        console.print(header)
     except ImportError:
-        pass
+        console.print(Text("  memoria", style="dim #00D9FF"))
     console.print()
+
+
+# ── Input (prompt_toolkit) ─────────────────────────────────────────────
+# Enter submits.  Bracketed paste mode (enabled by default in
+# prompt_toolkit) lets multiline pastes land in the buffer without
+# triggering submit mid-paste.  PromptSession keeps in-memory history;
+# Up/Down arrows cycle through it.
+#
+# Session is created lazily so that importing ui.py in environments
+# without a real console (e.g. pytest) doesn't blow up.
+
+_prompt_text = FormattedText([("#00D9FF bold", "you"), ("", "  ")])
+_session: PromptSession | None = None
 
 
 def get_user_input() -> str:
     """Get user input with 'you' prefix. Returns 'quit' on Ctrl+C/Ctrl+D."""
+    global _session
+    if _session is None:
+        _session = PromptSession()
     console.print()
-    console.print(Text("you", style="bold #00D9FF"), end="  ")
     try:
-        return input().strip()
+        text = _session.prompt(_prompt_text)
+        return text.strip()
     except (KeyboardInterrupt, EOFError):
         console.print()
         return "quit"
+
+
+def display_status(tokens: int, session: int):
+    """Dim status line between response and next prompt."""
+    console.print(Text(f"  ↳ {tokens:,} tokens  ·  session {session}", style="dim"))
 
 
 def display_response(content: str):
