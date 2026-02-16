@@ -52,7 +52,6 @@ def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEX
     """
     if not messages:
         return messages
-    from ui import console
     system_msgs = [m for m in messages if m.get("role") in SYSTEM_MESSAGE_ROLES]
     conversation_msgs = [m for m in messages if m.get("role") not in SYSTEM_MESSAGE_ROLES]
     if len(conversation_msgs) <= max_messages:
@@ -83,9 +82,6 @@ def truncate_messages(messages: list, max_messages: int = MAX_MESSAGES_IN_CONTEX
         chosen_cut = cut_points[-1] if cut_points else best_cut
 
     kept_conversation = conversation_msgs[chosen_cut:]
-    dropped_count = len(conversation_msgs) - len(kept_conversation)
-    if dropped_count > 0:
-        console.print(f"[dim]Truncated {dropped_count} old messages to stay within context limit[/dim]")
     return system_msgs + kept_conversation
 
 
@@ -185,12 +181,13 @@ def call_llm(messages, tools=None, stream=False, live_display=None, max_tokens=N
         except requests.exceptions.RequestException as e:
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
-                from ui import console
-                console.print(f"[dim]Request failed ({e.__class__.__name__}), retrying in {delay}s...[/dim]")
+                if attempt == 0:
+                    from ui import console
+                    console.print("[dim]  ·[/dim]")
                 time.sleep(delay)
                 continue
             from ui import console
-            console.print(f"[dim #FF10F0]Error: {e}[/dim #FF10F0]")
+            console.print("[dim #FF10F0]  connection failed[/dim #FF10F0]")
             return None
 
     return None
